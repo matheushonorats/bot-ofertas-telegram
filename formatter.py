@@ -1,16 +1,22 @@
 import html
+from comment_generator import get_relaxed_comment
 
 def format_whatsapp_message(deal: dict) -> str:
     """
     Formats an ultra-engaging message ready to be copied and pasted directly into WhatsApp.
-    Uses WhatsApp formatting (*bold*, ~strikethrough~, _italic_).
+    Uses WhatsApp formatting (*bold*, ~strikethrough~, _italic_) and includes a relaxed,
+    contextual 1-sentence comment about the product.
     """
     platform = deal.get("platform", "Promoção")
     title = deal.get("title", "")
+    category = deal.get("category", "")
     curr_price = deal.get("current_price_str", "0,00")
     orig_price = deal.get("original_price_str", "")
     discount = deal.get("discount_percent", 0)
     link = deal.get("link", "")
+
+    # Relaxed comment tailored to product
+    comment = get_relaxed_comment(title, category)
 
     header = f"🔥 *SUPER OFERTA NA {platform.upper()}!* 🔥" if platform.lower() == "shopee" else f"🔥 *SUPER OFERTA NO {platform.upper()}!* 🔥"
 
@@ -18,6 +24,7 @@ def format_whatsapp_message(deal: dict) -> str:
         header,
         "",
         f"📦 *{title}*",
+        f"💬 _{comment}_",
         ""
     ]
 
@@ -49,9 +56,8 @@ def format_telegram_caption(deal: dict, whatsapp_text: str) -> str:
     discount = deal.get("discount_percent", 0)
     disc_text = f" ({discount}% OFF)" if discount else ""
 
-    # Telegram HTML caption (Max 1024 chars for photo captions)
     escaped_wa = html.escape(whatsapp_text)
-    
+
     caption = (
         f"🎯 <b>Nova Oferta Detectada: {platform}{disc_text}</b>\n\n"
         f"📋 <b>Toque no bloco abaixo para copiar a mensagem do WhatsApp:</b>\n\n"
