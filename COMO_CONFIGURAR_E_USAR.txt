@@ -1,0 +1,103 @@
+================================================================================
+          GUIA COMPLETO DE USO - BOT DE OFERTAS MERCADO LIVRE & SHOPEE
+================================================================================
+
+Este robô monitora continuamente as melhores promoções do Mercado Livre e da Shopee,
+injeta os seus links de afiliado/associado e envia no seu Telegram com a FOTO e com
+o TEXTO formatado para o WhatsApp pronto para ser copiado com apenas 1 toque.
+
+--------------------------------------------------------------------------------
+1. COMO FUNCIONA O COPIAR E COLAR NO WHATSAPP
+--------------------------------------------------------------------------------
+No seu celular ou no Telegram do computador:
+- O robô enviará a FOTO do produto.
+- Abaixo da foto, o texto vem dentro de um bloco de código.
+- Basta dar UM TOQUE em cima do texto no Telegram para ele ser copiado
+  automaticamente para a sua área de transferência.
+- Depois, basta abrir o WhatsApp (seus grupos, listas ou status) e colar!
+  O texto já vai com emojis, preços riscados, valor promocional e seu link.
+
+--------------------------------------------------------------------------------
+2. PASSO A PASSO PARA CONFIGURAR PELA PRIMEIRA VEZ
+--------------------------------------------------------------------------------
+
+PASSO 1: Criar o Bot no Telegram (leva 1 minuto)
+1. No seu Telegram, pesquise pelo usuário: @BotFather
+2. Clique em "Começar" ou envie: /start
+3. Envie o comando: /newbot
+4. Digite um nome para o bot (ex: Meu Bot de Ofertas).
+5. Digite um nome de usuário que termine com 'bot' (ex: minhas_ofertas_bot).
+6. O @BotFather vai te enviar uma mensagem com o TOKEN HTTP API.
+   (Exemplo de token: 7123456789:AAFxAbc123456789_xyz)
+7. Copie esse token!
+
+PASSO 2: Preencher o arquivo .env
+1. Abra a pasta "Bot_Ofertas_Telegram" na sua Área de Trabalho.
+2. Abra o arquivo chamado ".env" com o Bloco de Notas (Notepad).
+3. Na linha TELEGRAM_BOT_TOKEN=, cole o token que o BotFather te deu:
+   TELEGRAM_BOT_TOKEN=7123456789:AAFxAbc123456789_xyz
+4. Salve o arquivo (Ctrl + S).
+
+PASSO 3: Descobrir o seu Chat ID
+1. Dê dois cliques no arquivo "iniciar_bot.bat" para ligar o robô.
+2. Vá no Telegram, abra a conversa com o seu bot recém-criado e envie: /start
+3. O robô vai responder imediatamente dizendo qual é o seu Chat ID (número).
+4. Copie esse número, volte no arquivo ".env" e cole em:
+   TELEGRAM_CHAT_ID=123456789
+5. Salve o arquivo. Pronto! Seu Telegram já está 100% conectado.
+
+PASSO 4: Colocar seus Links de Afiliado
+Ainda dentro do arquivo ".env":
+- Para o Mercado Livre:
+  Insira a sua tag de afiliado na linha:
+  ML_AFFILIATE_TAG=matt_tool=SEU_ID_DE_AFILIADO
+- Para a Shopee:
+  Insira seu sub_id ou tag na linha:
+  SHOPEE_AFFILIATE_TAG=sub_id=whatsapp_promo
+  (Se você tiver as chaves da API Oficial da Shopee, pode preencher também
+   SHOPEE_APP_ID e SHOPEE_APP_SECRET para gerar links encurtados automáticos).
+
+--------------------------------------------------------------------------------
+3. COMO USAR NO DIA A DIA
+--------------------------------------------------------------------------------
+
+* PARA DEIXAR O ROBÔ TRABALHANDO AUTOMATICAMENTE:
+  Dê dois cliques no arquivo:
+  👉 iniciar_bot.bat
+  Ele ficará rodando e fará varreduras a cada 30 minutos (você pode alterar
+  esse tempo no arquivo .env na opção CHECK_INTERVAL_MINUTES).
+
+* PARA FORÇAR O ENVIO DE OFERTAS NA HORA:
+  No próprio Telegram, envie para o seu robô:
+  👉 /ofertas
+  Ele buscará as melhores ofertas do momento no Mercado Livre e na Shopee
+  e te enviará imediatamente!
+
+* PARA TESTAR A RASPAGEM SEM USAR O TELEGRAM:
+  Dê dois cliques no arquivo:
+  👉 testar.bat
+
+--------------------------------------------------------------------------------
+4. COMANDOS DISPONÍVEIS NO TELEGRAM
+--------------------------------------------------------------------------------
+Você pode conversar com o seu bot enviando:
+• /ofertas - Busca ofertas imediatamente no ML e Shopee
+• /status  - Mostra quantas ofertas já foram enviadas hoje e os filtros ativos
+• /ajuda   - Mostra instruções rápidas de uso
+
+--------------------------------------------------------------------------------
+5. PERSONALIZAÇÃO DE FILTROS (ARQUIVO .env)
+--------------------------------------------------------------------------------
+- MIN_DISCOUNT_PERCENT: Desconto mínimo para enviar a oferta (padrão: 15% OFF).
+- MAX_DEALS_PER_RUN: Limite de ofertas por vez para não lotar seu Telegram (padrão: 5).
+- CHECK_INTERVAL_MINUTES: Intervalo entre buscas automáticas (padrão: 30 minutos).
+- ML_CATEGORIES: Categorias do Mercado Livre monitoradas.
+
+--------------------------------------------------------------------------------
+Arquivos da Pasta:
+- iniciar_bot.bat    -> Dá partida no robô.
+- testar.bat         -> Faz um teste rápido na tela do computador.
+- .env               -> Onde ficam seus tokens e links de afiliado.
+- deals.db           -> Banco de dados que grava o que já foi enviado.
+- README.md          -> Documentação técnica em Markdown.
+================================================================================
