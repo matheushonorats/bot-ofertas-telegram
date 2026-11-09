@@ -60,7 +60,18 @@ class TelegramClient:
 
         try:
             resp = requests.post(f"{self.api_url}/sendMessage", json=payload, timeout=12)
-            return resp.json().get("ok", False)
+            data = resp.json()
+            if data.get("ok"):
+                return True
+            # Auto-handle supergroup migration
+            migrated_id = data.get("parameters", {}).get("migrate_to_chat_id")
+            if migrated_id:
+                print(f"[Telegram] Grupo migrado para supergrupo. Novo ID: {migrated_id}")
+                Config.TELEGRAM_CHAT_ID = str(migrated_id)
+                payload["chat_id"] = str(migrated_id)
+                retry_resp = requests.post(f"{self.api_url}/sendMessage", json=payload, timeout=12)
+                return retry_resp.json().get("ok", False)
+            return False
         except Exception as e:
             print(f"[Telegram] Erro ao enviar mensagem: {e}")
             return False
@@ -82,6 +93,13 @@ class TelegramClient:
             data = resp.json()
             if data.get("ok"):
                 return True
+            migrated_id = data.get("parameters", {}).get("migrate_to_chat_id")
+            if migrated_id:
+                Config.TELEGRAM_CHAT_ID = str(migrated_id)
+                payload["chat_id"] = str(migrated_id)
+                retry_resp = requests.post(f"{self.api_url}/sendPhoto", json=payload, timeout=15)
+                if retry_resp.json().get("ok"):
+                    return True
         except Exception:
             pass
 
@@ -95,7 +113,7 @@ class TelegramClient:
             if img_resp.status_code == 200:
                 files = {"photo": ("image.jpg", io.BytesIO(img_resp.content), "image/jpeg")}
                 data = {
-                    "chat_id": chat_id,
+                    "chat_id": Config.TELEGRAM_CHAT_ID or chat_id,
                     "caption": caption,
                     "parse_mode": parse_mode
                 }
@@ -109,7 +127,7 @@ class TelegramClient:
             print(f"[Telegram] Erro ao carregar/enviar foto: {e}")
 
         # 3. Fallback: send as text message if photo completely fails
-        return self.send_message(chat_id, caption, parse_mode=parse_mode, reply_markup=reply_markup)
+        return self.send_message(Config.TELEGRAM_CHAT_ID or chat_id, caption, parse_mode=parse_mode, reply_markup=reply_markup)
 
     def send_deal(self, chat_id: str, deal: dict) -> bool:
         """
@@ -118,6 +136,7 @@ class TelegramClient:
         - Interactive block ready for 1-click copy into WhatsApp
         - Instant 1-click [📲 Compartilhar no WhatsApp] button
         """
+        target_chat = Config.TELEGRAM_CHAT_ID or chat_id
         wa_text = format_whatsapp_message(deal)
         tg_caption = format_telegram_caption(deal, wa_text)
         photo_url = deal.get("image", "")
@@ -132,18 +151,18 @@ class TelegramClient:
 
         # Telegram photo caption limit is 1024 characters
         if len(tg_caption) <= 1024 and photo_url:
-            return self.send_photo(chat_id, photo_url, caption=tg_caption, parse_mode="HTML", reply_markup=reply_markup)
+            return self.send_photo(target_chat, photo_url, caption=tg_caption, parse_mode="HTML", reply_markup=reply_markup)
         elif photo_url:
             # Send photo with short info, then send full copyable WhatsApp text with share button
             platform = deal.get("platform", "Oferta")
             short_caption = f"🎯 <b>Nova Oferta: {platform}</b>\n{html.escape(deal.get('title', ''))}"
-            self.send_photo(chat_id, photo_url, caption=short_caption[:1024], parse_mode="HTML")
+            self.send_photo(target_chat, photo_url, caption=short_caption[:1024], parse_mode="HTML")
             return self.send_message(
-                chat_id,
+                target_chat,
                 f"📋 <b>Toque abaixo para copiar para o WhatsApp:</b>\n\n<code>{html.escape(wa_text)}</code>",
                 parse_mode="HTML",
                 reply_markup=reply_markup
             )
         else:
             # No photo available, send as message with button
-            return self.send_message(chat_id, tg_caption, parse_mode="HTML", reply_markup=reply_markup)
+            return self.send_message(target_chat, tg_caption, parse_mode="HTML", reply_markup=reply_markup)

@@ -3,7 +3,7 @@ from config import Config
 from affiliate import format_shopee_affiliate_link
 from database import is_deal_seen
 
-def fetch_shopee_deals(limit=20):
+def fetch_shopee_deals(limit=50):
     """
     Fetches hot deals from Shopee Flash Sale API.
     """
