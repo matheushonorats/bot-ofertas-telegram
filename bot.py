@@ -99,6 +99,15 @@ def run_deal_scanner(telegram: TelegramClient, chat_id: str = None, max_deals: i
     print(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ Varredura finalizada. {sent_count} novas ofertas enviadas.")
     return sent_count
 
+def setup_commands(telegram: TelegramClient):
+    """Registers official command buttons in Telegram menu."""
+    commands = [
+        {"command": "ofertas", "description": "🔎 Buscar ofertas relâmpago na Shopee agora"},
+        {"command": "status", "description": "📊 Ver quantas ofertas foram enviadas hoje"},
+        {"command": "ajuda", "description": "❓ Como compartilhar no WhatsApp"}
+    ]
+    telegram.set_my_commands(commands)
+
 def handle_telegram_updates(telegram: TelegramClient):
     """Listens for user commands via Telegram long-polling."""
     offset = None
@@ -123,41 +132,47 @@ def handle_telegram_updates(telegram: TelegramClient):
                 if text.startswith("/start"):
                     welcome = (
                         f"👋 <b>Olá, {username}!</b>\n\n"
-                        f"🤖 Eu sou o seu <b>Bot de Ofertas & Afiliados</b>.\n\n"
-                        f"📌 <b>Seu Chat ID é:</b> <code>{chat_id}</code>\n"
-                        f"<i>(Copie este número e coloque na variável TELEGRAM_CHAT_ID no seu arquivo .env se ainda não configurou)</i>\n\n"
-                        f"⚙️ <b>Comandos disponíveis:</b>\n"
-                        f"• /ofertas - Buscar as melhores promoções agora\n"
-                        f"• /status - Ver estatísticas do robô\n"
-                        f"• /ajuda - Informações e ajuda"
+                        f"🛍️ Este é o seu <b>Bot de Ofertas Shopee</b>.\n\n"
+                        f"Ele busca automaticamente as melhores promoções da Shopee com o seu <b>link de afiliada já embutido</b>!\n\n"
+                        f"📌 <b>Como usar no dia a dia:</b>\n"
+                        f"1. Toque no botão <b>[ 📲 Compartilhar no WhatsApp ]</b> abaixo de qualquer oferta.\n"
+                        f"2. Escolha o seu grupo no WhatsApp e clique em <b>Enviar</b>!\n\n"
+                        f"⚙️ <b>Comandos:</b>\n"
+                        f"• /ofertas - Buscar ofertas agora mesmo\n"
+                        f"• /status - Ver quantas ofertas foram enviadas hoje\n"
+                        f"• /ajuda - Instruções simples de como usar"
                     )
                     telegram.send_message(chat_id, welcome)
 
                 elif text.startswith("/ofertas"):
-                    telegram.send_message(chat_id, "🔎 Buscando as melhores ofertas no Mercado Livre e Shopee agora, aguarde...")
+                    telegram.send_message(chat_id, "🔎 Buscando as melhores ofertas relâmpago na Shopee agora, aguarde um instante...")
                     sent = run_deal_scanner(telegram, chat_id=chat_id, max_deals=3)
                     if sent == 0:
-                        telegram.send_message(chat_id, "ℹ️ Nenhuma nova oferta com os filtros atuais no momento. Verificarei novamente em breve!")
+                        telegram.send_message(chat_id, "ℹ️ Nenhuma nova oferta com super desconto encontrada no momento. Buscarei novamente em breve!")
 
                 elif text.startswith("/status"):
                     stats = get_stats()
                     status_msg = (
-                        f"📊 <b>Status do Bot de Ofertas</b>\n\n"
+                        f"📊 <b>Painel do Bot de Ofertas</b>\n\n"
                         f"🔥 <b>Ofertas enviadas hoje:</b> {stats['today']}\n"
-                        f"📦 <b>Total histórico:</b> {stats['total']}\n"
-                        f"⏱️ <b>Intervalo automático:</b> Cada {Config.CHECK_INTERVAL_MINUTES} minutos\n"
-                        f"🏷️ <b>Desconto mínimo:</b> {Config.MIN_DISCOUNT_PERCENT}%\n"
-                        f"🛒 <b>Plataformas ativas:</b> Mercado Livre, Shopee"
+                        f"📦 <b>Total histórico de ofertas:</b> {stats['total']}\n"
+                        f"⏱️ <b>Verificação automática:</b> A cada {Config.CHECK_INTERVAL_MINUTES} minutos\n"
+                        f"🏷️ <b>Filtro:</b> Mínimo de {Config.MIN_DISCOUNT_PERCENT}% de desconto\n"
+                        f"🛍️ <b>Plataforma:</b> Shopee (com seu link de afiliada)"
                     )
                     telegram.send_message(chat_id, status_msg)
 
                 elif text.startswith("/ajuda"):
                     help_msg = (
-                        "ℹ️ <b>Como funciona:</b>\n\n"
-                        "1. Eu monitoro as páginas de ofertas do <b>Mercado Livre</b> e <b>Shopee</b>.\n"
-                        "2. Quando encontro um super desconto, gero a mensagem completa com seu <b>link de associado</b> e <b>foto</b>.\n"
-                        "3. A mensagem vem dentro de um bloco copiável: basta dar <b>1 toque</b> no Telegram e colar no seu WhatsApp!\n\n"
-                        "Use /ofertas para forçar uma busca imediata."
+                        "❓ <b>Como compartilhar as ofertas no WhatsApp:</b>\n\n"
+                        "<b>Opção 1 (A mais rápida - 1 Toque):</b>\n"
+                        "Toque no botão azul <b>[ 📲 Compartilhar no WhatsApp ]</b> embaixo da oferta. "
+                        "O WhatsApp vai abrir sozinho com a mensagem e o seu link prontos. É só selecionar o seu grupo e enviar!\n\n"
+                        "<b>Opção 2 (Com foto no WhatsApp):</b>\n"
+                        "Se você quiser mandar com a foto grande no WhatsApp:\n"
+                        "1. Toque na foto aqui no Telegram e compartilhe no seu grupo de WhatsApp.\n"
+                        "2. Depois toque no texto da oferta (ele copia sozinho) e cole na legenda da foto!\n\n"
+                        "💡 <i>Dica: Para buscar promoções a qualquer momento, use o botão Menu no canto da tela ou digite /ofertas.</i>"
                     )
                     telegram.send_message(chat_id, help_msg)
 
@@ -203,6 +218,9 @@ def main():
         sys.exit(1)
 
     print(f"🤖 Bot conectado com sucesso como @{bot_info.get('username')}")
+
+    # Registra o menu nativo de comandos no Telegram
+    setup_commands(telegram)
 
     # Start healthcheck web server for Render / cloud deployments
     start_health_server()

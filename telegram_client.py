@@ -23,6 +23,15 @@ class TelegramClient:
             print(f"[Telegram] Falha de conexão: {e}")
         return {}
 
+    def set_my_commands(self, commands: list) -> bool:
+        """Registers the official command menu in Telegram."""
+        try:
+            resp = requests.post(f"{self.api_url}/setMyCommands", json={"commands": commands}, timeout=10)
+            return resp.json().get("ok", False)
+        except Exception as e:
+            print(f"[Telegram] Erro ao registrar comandos: {e}")
+            return False
+
     def get_updates(self, offset: int = None) -> list:
         """Polls for new messages sent to the bot."""
         params = {"timeout": 20}
