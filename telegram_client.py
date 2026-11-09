@@ -1,5 +1,7 @@
 import io
+import json
 import html
+import urllib.parse
 import requests
 from config import Config
 from formatter import format_whatsapp_message, format_telegram_caption
@@ -36,38 +38,38 @@ class TelegramClient:
             print(f"[Telegram] Erro ao obter updates: {e}")
         return []
 
-    def send_message(self, chat_id: str, text: str, parse_mode: str = "HTML") -> bool:
-        """Sends a plain text message to the specified chat."""
+    def send_message(self, chat_id: str, text: str, parse_mode: str = "HTML", reply_markup: dict = None) -> bool:
+        """Sends a plain text message to the specified chat with optional buttons."""
+        payload = {
+            "chat_id": chat_id,
+            "text": text,
+            "parse_mode": parse_mode,
+            "disable_web_page_preview": False
+        }
+        if reply_markup:
+            payload["reply_markup"] = reply_markup
+
         try:
-            resp = requests.post(
-                f"{self.api_url}/sendMessage",
-                json={
-                    "chat_id": chat_id,
-                    "text": text,
-                    "parse_mode": parse_mode,
-                    "disable_web_page_preview": False
-                },
-                timeout=12
-            )
+            resp = requests.post(f"{self.api_url}/sendMessage", json=payload, timeout=12)
             return resp.json().get("ok", False)
         except Exception as e:
             print(f"[Telegram] Erro ao enviar mensagem: {e}")
             return False
 
-    def send_photo(self, chat_id: str, photo: str, caption: str = "", parse_mode: str = "HTML") -> bool:
-        """Sends a photo using URL or direct upload."""
+    def send_photo(self, chat_id: str, photo: str, caption: str = "", parse_mode: str = "HTML", reply_markup: dict = None) -> bool:
+        """Sends a photo using URL or direct upload with optional buttons."""
         # 1. Try sending by direct URL first
         try:
-            resp = requests.post(
-                f"{self.api_url}/sendPhoto",
-                json={
-                    "chat_id": chat_id,
-                    "photo": photo,
-                    "caption": caption,
-                    "parse_mode": parse_mode
-                },
-                timeout=15
-            )
+            payload = {
+                "chat_id": chat_id,
+                "photo": photo,
+                "caption": caption,
+                "parse_mode": parse_mode
+            }
+            if reply_markup:
+                payload["reply_markup"] = reply_markup
+
+            resp = requests.post(f"{self.api_url}/sendPhoto", json=payload, timeout=15)
             data = resp.json()
             if data.get("ok"):
                 return True
@@ -88,6 +90,9 @@ class TelegramClient:
                     "caption": caption,
                     "parse_mode": parse_mode
                 }
+                if reply_markup:
+                    data["reply_markup"] = json.dumps(reply_markup)
+
                 upload_resp = requests.post(f"{self.api_url}/sendPhoto", data=data, files=files, timeout=20)
                 if upload_resp.json().get("ok"):
                     return True
@@ -95,31 +100,41 @@ class TelegramClient:
             print(f"[Telegram] Erro ao carregar/enviar foto: {e}")
 
         # 3. Fallback: send as text message if photo completely fails
-        return self.send_message(chat_id, caption, parse_mode=parse_mode)
+        return self.send_message(chat_id, caption, parse_mode=parse_mode, reply_markup=reply_markup)
 
     def send_deal(self, chat_id: str, deal: dict) -> bool:
         """
         Sends the complete deal card to Telegram:
         - Product Photo
         - Interactive block ready for 1-click copy into WhatsApp
+        - Instant 1-click [📲 Compartilhar no WhatsApp] button
         """
         wa_text = format_whatsapp_message(deal)
         tg_caption = format_telegram_caption(deal, wa_text)
         photo_url = deal.get("image", "")
 
+        # Create 1-click WhatsApp share button
+        wa_share_url = f"https://api.whatsapp.com/send?text={urllib.parse.quote(wa_text)}"
+        reply_markup = {
+            "inline_keyboard": [
+                [{"text": "📲 Compartilhar no WhatsApp", "url": wa_share_url}]
+            ]
+        }
+
         # Telegram photo caption limit is 1024 characters
         if len(tg_caption) <= 1024 and photo_url:
-            return self.send_photo(chat_id, photo_url, caption=tg_caption, parse_mode="HTML")
+            return self.send_photo(chat_id, photo_url, caption=tg_caption, parse_mode="HTML", reply_markup=reply_markup)
         elif photo_url:
-            # Send photo with short info, then send full copyable WhatsApp text
+            # Send photo with short info, then send full copyable WhatsApp text with share button
             platform = deal.get("platform", "Oferta")
             short_caption = f"🎯 <b>Nova Oferta: {platform}</b>\n{html.escape(deal.get('title', ''))}"
             self.send_photo(chat_id, photo_url, caption=short_caption[:1024], parse_mode="HTML")
             return self.send_message(
                 chat_id,
                 f"📋 <b>Toque abaixo para copiar para o WhatsApp:</b>\n\n<code>{html.escape(wa_text)}</code>",
-                parse_mode="HTML"
+                parse_mode="HTML",
+                reply_markup=reply_markup
             )
         else:
-            # No photo available, send as message
-            return self.send_message(chat_id, tg_caption, parse_mode="HTML")
+            # No photo available, send as message with button
+            return self.send_message(chat_id, tg_caption, parse_mode="HTML", reply_markup=reply_markup)
