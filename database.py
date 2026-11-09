@@ -23,9 +23,36 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        # Index on product_id and title for ultra fast duplicate checks
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_seen_deals_pid ON seen_deals(product_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_seen_deals_title ON seen_deals(title)")
+
+        # Settings table for interactive panel toggles
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS bot_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+        """)
+        # Default settings
+        cursor.execute("INSERT OR IGNORE INTO bot_settings (key, value) VALUES ('comments_enabled', 'true')")
+        cursor.execute("INSERT OR IGNORE INTO bot_settings (key, value) VALUES ('check_interval', '10')")
+        cursor.execute("INSERT OR IGNORE INTO bot_settings (key, value) VALUES ('min_discount', '15')")
+        conn.commit()
+
+def get_setting(key: str, default: str = "") -> str:
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT value FROM bot_settings WHERE key = ?", (key,))
+        row = cursor.fetchone()
+        return row[0] if row else default
+
+def set_setting(key: str, value: str):
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO bot_settings (key, value) VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        """, (key, str(value)))
         conn.commit()
 
 def is_deal_seen(product_id: str, title: str = "") -> bool:
@@ -43,10 +70,10 @@ def is_deal_seen(product_id: str, title: str = "") -> bool:
 
         # Check by Title (prevents re-listings of the same item)
         if title:
-            clean_title = title.strip()
+            clean_title = title.strip().lower()
             cursor.execute("""
                 SELECT 1 FROM seen_deals 
-                WHERE title = ? AND created_at >= datetime('now', '-2 days')
+                WHERE LOWER(title) = ? AND created_at >= datetime('now', '-2 days')
             """, (clean_title,))
             if cursor.fetchone() is not None:
                 return True

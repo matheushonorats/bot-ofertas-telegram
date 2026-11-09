@@ -1,11 +1,12 @@
 import html
 from comment_generator import get_relaxed_comment
+from database import get_setting
 
 def format_whatsapp_message(deal: dict) -> str:
     """
     Formats an ultra-engaging message ready to be copied and pasted directly into WhatsApp.
     Uses WhatsApp formatting (*bold*, ~strikethrough~, _italic_) and includes a relaxed,
-    contextual 1-sentence comment about the product.
+    contextual 1-sentence comment about the product if enabled.
     """
     platform = deal.get("platform", "Promoção")
     title = deal.get("title", "")
@@ -15,18 +16,22 @@ def format_whatsapp_message(deal: dict) -> str:
     discount = deal.get("discount_percent", 0)
     link = deal.get("link", "")
 
-    # Relaxed comment tailored to product
-    comment = get_relaxed_comment(title, category)
+    # Relaxed comment tailored to product (respects user panel toggle)
+    comments_active = get_setting("comments_enabled", "true") == "true"
+    comment = get_relaxed_comment(title, category) if comments_active else ""
 
     header = f"🔥 *SUPER OFERTA NA {platform.upper()}!* 🔥" if platform.lower() == "shopee" else f"🔥 *SUPER OFERTA NO {platform.upper()}!* 🔥"
 
     lines = [
         header,
         "",
-        f"📦 *{title}*",
-        f"💬 _{comment}_",
-        ""
+        f"📦 *{title}*"
     ]
+
+    if comment:
+        lines.append(f"💬 _{comment}_")
+
+    lines.append("")
 
     if orig_price and orig_price != curr_price:
         lines.append(f"❌ De: ~R$ {orig_price}~")

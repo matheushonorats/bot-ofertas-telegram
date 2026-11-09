@@ -32,6 +32,36 @@ class TelegramClient:
             print(f"[Telegram] Erro ao registrar comandos: {e}")
             return False
 
+    def answer_callback_query(self, callback_query_id: str, text: str = "", show_alert: bool = False) -> bool:
+        """Acknowledges an inline button click and optionally shows a popup notification."""
+        try:
+            resp = requests.post(
+                f"{self.api_url}/answerCallbackQuery",
+                json={"callback_query_id": callback_query_id, "text": text, "show_alert": show_alert},
+                timeout=10
+            )
+            return resp.json().get("ok", False)
+        except Exception as e:
+            print(f"[Telegram] Erro em answerCallbackQuery: {e}")
+            return False
+
+    def edit_message_text(self, chat_id: str, message_id: int, text: str, parse_mode: str = "HTML", reply_markup: dict = None) -> bool:
+        """Edits an existing text message."""
+        payload = {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": text,
+            "parse_mode": parse_mode
+        }
+        if reply_markup:
+            payload["reply_markup"] = reply_markup
+        try:
+            resp = requests.post(f"{self.api_url}/editMessageText", json=payload, timeout=12)
+            return resp.json().get("ok", False)
+        except Exception as e:
+            print(f"[Telegram] Erro em editMessageText: {e}")
+            return False
+
     def get_updates(self, offset: int = None) -> list:
         """Polls for new messages sent to the bot."""
         params = {"timeout": 20}
