@@ -79,7 +79,9 @@ def fetch_shopee_deals(limit=50):
                 "discount_percent": int(discount_percent),
                 "link": affiliate_url,
                 "image": image_url,
-                "category": "Flash Sale"
+                "category": "Flash Sale",
+                "end_time": int(item.get("end_time", 0)),
+                "stock": int(item.get("stock", 1))
             })
 
     except Exception as e:

@@ -77,8 +77,21 @@ class TelegramClient:
             print(f"[Telegram] Erro ao obter updates: {e}")
         return []
 
-    def send_message(self, chat_id: str, text: str, parse_mode: str = "HTML", reply_markup: dict = None) -> bool:
-        """Sends a plain text message to the specified chat with optional buttons."""
+    def delete_message(self, chat_id: str, message_id: int) -> bool:
+        """Deletes a message from Telegram chat."""
+        try:
+            resp = requests.post(
+                f"{self.api_url}/deleteMessage",
+                json={"chat_id": chat_id, "message_id": message_id},
+                timeout=10
+            )
+            return resp.json().get("ok", False)
+        except Exception as e:
+            print(f"[Telegram] Erro ao deletar mensagem {message_id}: {e}")
+            return False
+
+    def send_message(self, chat_id: str, text: str, parse_mode: str = "HTML", reply_markup: dict = None):
+        """Sends a plain text message to the specified chat with optional buttons. Returns message_id or None."""
         payload = {
             "chat_id": chat_id,
             "text": text,
@@ -92,7 +105,7 @@ class TelegramClient:
             resp = requests.post(f"{self.api_url}/sendMessage", json=payload, timeout=12)
             data = resp.json()
             if data.get("ok"):
-                return True
+                return data.get("result", {}).get("message_id")
             # Auto-handle supergroup migration
             migrated_id = data.get("parameters", {}).get("migrate_to_chat_id")
             if migrated_id:
@@ -100,14 +113,16 @@ class TelegramClient:
                 Config.TELEGRAM_CHAT_ID = str(migrated_id)
                 payload["chat_id"] = str(migrated_id)
                 retry_resp = requests.post(f"{self.api_url}/sendMessage", json=payload, timeout=12)
-                return retry_resp.json().get("ok", False)
-            return False
+                retry_data = retry_resp.json()
+                if retry_data.get("ok"):
+                    return retry_data.get("result", {}).get("message_id")
+            return None
         except Exception as e:
             print(f"[Telegram] Erro ao enviar mensagem: {e}")
-            return False
+            return None
 
-    def send_photo(self, chat_id: str, photo: str, caption: str = "", parse_mode: str = "HTML", reply_markup: dict = None) -> bool:
-        """Sends a photo using URL or direct upload with optional buttons."""
+    def send_photo(self, chat_id: str, photo: str, caption: str = "", parse_mode: str = "HTML", reply_markup: dict = None):
+        """Sends a photo using URL or direct upload with optional buttons. Returns message_id or None."""
         # 1. Try sending by direct URL first
         try:
             payload = {
@@ -122,14 +137,15 @@ class TelegramClient:
             resp = requests.post(f"{self.api_url}/sendPhoto", json=payload, timeout=15)
             data = resp.json()
             if data.get("ok"):
-                return True
+                return data.get("result", {}).get("message_id")
             migrated_id = data.get("parameters", {}).get("migrate_to_chat_id")
             if migrated_id:
                 Config.TELEGRAM_CHAT_ID = str(migrated_id)
                 payload["chat_id"] = str(migrated_id)
                 retry_resp = requests.post(f"{self.api_url}/sendPhoto", json=payload, timeout=15)
-                if retry_resp.json().get("ok"):
-                    return True
+                retry_data = retry_resp.json()
+                if retry_data.get("ok"):
+                    return retry_data.get("result", {}).get("message_id")
         except Exception:
             pass
 
@@ -151,8 +167,9 @@ class TelegramClient:
                     data["reply_markup"] = json.dumps(reply_markup)
 
                 upload_resp = requests.post(f"{self.api_url}/sendPhoto", data=data, files=files, timeout=20)
-                if upload_resp.json().get("ok"):
-                    return True
+                upload_data = upload_resp.json()
+                if upload_data.get("ok"):
+                    return upload_data.get("result", {}).get("message_id")
         except Exception as e:
             print(f"[Telegram] Erro ao carregar/enviar foto: {e}")
 

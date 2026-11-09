@@ -26,6 +26,16 @@ def init_db():
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_seen_deals_pid ON seen_deals(product_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_seen_deals_title ON seen_deals(title)")
 
+        # Migration: ensure telegram_message_id, end_time, is_active exist
+        cursor.execute("PRAGMA table_info(seen_deals)")
+        columns = [col[1] for col in cursor.fetchall()]
+        if "telegram_message_id" not in columns:
+            cursor.execute("ALTER TABLE seen_deals ADD COLUMN telegram_message_id INTEGER")
+        if "end_time" not in columns:
+            cursor.execute("ALTER TABLE seen_deals ADD COLUMN end_time INTEGER")
+        if "is_active" not in columns:
+            cursor.execute("ALTER TABLE seen_deals ADD COLUMN is_active INTEGER DEFAULT 1")
+
         # Settings table for interactive panel toggles
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS bot_settings (
@@ -40,6 +50,7 @@ def init_db():
         cursor.execute("INSERT OR IGNORE INTO bot_settings (key, value) VALUES ('start_hour', '8')")
         cursor.execute("INSERT OR IGNORE INTO bot_settings (key, value) VALUES ('end_hour', '22')")
         cursor.execute("INSERT OR IGNORE INTO bot_settings (key, value) VALUES ('active_days', 'todos')")
+        cursor.execute("INSERT OR IGNORE INTO bot_settings (key, value) VALUES ('repeat_days', '2')")
         conn.commit()
 
 def get_setting(key: str, default: str = "") -> str:
@@ -60,37 +71,44 @@ def set_setting(key: str, value: str):
 
 def is_deal_seen(product_id: str, title: str = "") -> bool:
     """
-    Double protection against duplicates:
-    1. Checks if the unique product_id was already sent.
-    2. Checks if an identical title was already sent in the last 48 hours.
+    Checks if a deal has been seen within the configured repeat_days window.
+    1. Checks if the unique product_id was already sent within repeat_days.
+    2. Checks if an identical title was already sent within repeat_days.
     """
+    repeat_days = int(get_setting("repeat_days", "2"))
+    cutoff = f"-{repeat_days} days"
+
     with get_connection() as conn:
         cursor = conn.cursor()
-        # Check by product ID
-        cursor.execute("SELECT 1 FROM seen_deals WHERE product_id = ?", (product_id,))
+        # Check by product ID within window
+        cursor.execute("""
+            SELECT 1 FROM seen_deals 
+            WHERE product_id = ? AND created_at >= datetime('now', ?)
+        """, (product_id, cutoff))
         if cursor.fetchone() is not None:
             return True
 
-        # Check by Title (prevents re-listings of the same item)
+        # Check by Title within window (prevents re-listings of the same item)
         if title:
             clean_title = title.strip().lower()
             cursor.execute("""
                 SELECT 1 FROM seen_deals 
-                WHERE LOWER(title) = ? AND created_at >= datetime('now', '-2 days')
-            """, (clean_title,))
+                WHERE LOWER(title) = ? AND created_at >= datetime('now', ?)
+            """, (clean_title, cutoff))
             if cursor.fetchone() is not None:
                 return True
 
         return False
 
-def save_deal(deal: dict):
+def save_deal(deal: dict, message_id: int = None):
     with get_connection() as conn:
         cursor = conn.cursor()
         try:
             cursor.execute("""
                 INSERT OR IGNORE INTO seen_deals (
-                    product_id, platform, title, price, original_price, discount_percent, url
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    product_id, platform, title, price, original_price, discount_percent, url,
+                    telegram_message_id, end_time, is_active
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
             """, (
                 deal.get("id"),
                 deal.get("platform"),
@@ -98,13 +116,37 @@ def save_deal(deal: dict):
                 float(deal.get("current_price", 0.0)),
                 float(deal.get("original_price", 0.0)),
                 int(deal.get("discount_percent", 0)),
-                deal.get("link")
+                deal.get("link"),
+                message_id,
+                int(deal.get("end_time", 0))
             ))
+            if message_id:
+                cursor.execute("""
+                    UPDATE seen_deals 
+                    SET telegram_message_id = ?, end_time = ?, is_active = 1 
+                    WHERE product_id = ?
+                """, (message_id, int(deal.get("end_time", 0)), deal.get("id")))
             conn.commit()
             return True
         except Exception as e:
             print(f"[DB Error] Error saving deal: {e}")
             return False
+
+def get_active_posted_deals():
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT product_id, platform, telegram_message_id, end_time, title 
+            FROM seen_deals 
+            WHERE telegram_message_id IS NOT NULL AND is_active = 1
+        """)
+        return [dict(row) for row in cursor.fetchall()]
+
+def mark_deal_inactive(product_id: str):
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE seen_deals SET is_active = 0 WHERE product_id = ?", (product_id,))
+        conn.commit()
 
 def get_stats():
     with get_connection() as conn:
@@ -125,7 +167,10 @@ def get_stats():
             "by_platform": by_platform
         }
 
-def cleanup_old_deals(days=7):
+def cleanup_old_deals(days=None):
+    if days is None:
+        repeat_days = int(get_setting("repeat_days", "2"))
+        days = max(repeat_days * 2, 14)
     cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
     with get_connection() as conn:
         cursor = conn.cursor()

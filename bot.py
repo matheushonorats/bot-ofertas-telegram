@@ -2,6 +2,7 @@ import sys
 import time
 import threading
 import argparse
+import requests
 from datetime import datetime, timezone, timedelta
 
 # Ensure UTF-8 output in Windows consoles
@@ -11,7 +12,10 @@ if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 from config import Config
-from database import save_deal, get_stats, cleanup_old_deals, get_setting, set_setting
+from database import (
+    save_deal, get_stats, cleanup_old_deals, get_setting, set_setting,
+    get_active_posted_deals, mark_deal_inactive
+)
 from scraper_ml import fetch_mercadolivre_deals
 from scraper_shopee import fetch_shopee_deals
 from telegram_client import TelegramClient
@@ -54,6 +58,7 @@ def build_panel_data():
     start_hour = int(get_setting("start_hour", "8"))
     end_hour = int(get_setting("end_hour", "22"))
     active_days = get_setting("active_days", "todos")
+    repeat_days = get_setting("repeat_days", "2")
 
     if start_hour == 0 and end_hour == 24:
         hours_str = "24h (Sem pausa)"
@@ -67,6 +72,14 @@ def build_panel_data():
     }
     days_str = days_map.get(active_days, "Todos os dias")
 
+    repeat_map = {
+        "2": "Após 2 dias",
+        "3": "Após 3 dias",
+        "7": "Após 7 dias",
+        "30": "Nunca (30d)"
+    }
+    repeat_str = repeat_map.get(repeat_days, "Após 2 dias")
+
     status_str = "✅ ATIVADAS" if comments_active else "❌ DESATIVADAS"
     toggle_label = "💬 Frases: DESATIVAR" if comments_active else "💬 Frases: ATIVAR"
 
@@ -76,6 +89,7 @@ def build_panel_data():
         f"💬 <b>Frases nos Produtos:</b> <code>{status_str}</code>\n"
         f"⏰ <b>Horário de Funcionamento:</b> <code>{hours_str}</code>\n"
         f"📅 <b>Dias de Envio:</b> <code>{days_str}</code>\n"
+        f"🔄 <b>Repetir Produtos:</b> <code>{repeat_str}</code>\n"
         f"⏱️ <b>Intervalo Automático:</b> <code>A cada {interval} min</code>\n"
         f"🏷️ <b>Desconto Mínimo:</b> <code>{min_disc}% OFF</code>\n"
         f"🛍️ <b>Plataforma:</b> <code>Shopee (Afiliada Bianca)</code>\n"
@@ -88,6 +102,7 @@ def build_panel_data():
                 {"text": f"⏰ Horário: {hours_str}", "callback_data": "cycle_hours"},
                 {"text": f"📅 Dias: {days_str}", "callback_data": "cycle_days"}
             ],
+            [{"text": f"🔄 Repetir: {repeat_str}", "callback_data": "cycle_repeat"}],
             [
                 {"text": f"⏱️ A cada: {interval}m", "callback_data": "cycle_interval"},
                 {"text": f"🏷️ Mínimo: {min_disc}%", "callback_data": "cycle_discount"}
@@ -174,6 +189,67 @@ def run_dry_run_test():
     print("=" * 60)
     print("✅ Teste concluído com sucesso!")
 
+def check_and_remove_expired_deals(telegram: TelegramClient):
+    """
+    Checks active deals posted in the Telegram group.
+    If the promotion has expired (time > end_time) or is out of stock,
+    automatically deletes the message from Telegram so Bianca only sees valid promotions.
+    """
+    target_chat = Config.TELEGRAM_CHAT_ID
+    if not target_chat:
+        return
+
+    active_deals = get_active_posted_deals()
+    if not active_deals:
+        return
+
+    current_ts = int(time.time())
+
+    # Fetch current flash items to check stock
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Referer": "https://shopee.com.br/flash_sale",
+        "Accept": "application/json"
+    }
+    flash_stocks = {}
+    try:
+        resp = requests.get("https://shopee.com.br/api/v4/flash_sale/flash_sale_get_items?limit=100&offset=0", headers=headers, timeout=10)
+        if resp.status_code == 200:
+            for item in resp.json().get("data", {}).get("items", []):
+                item_key = f"shopee_{item.get('shopid')}_{item.get('itemid')}"
+                flash_stocks[item_key] = {
+                    "stock": item.get("stock", 0),
+                    "end_time": item.get("end_time", 0)
+                }
+    except Exception as e:
+        print(f"[Auto-Remoção] Aviso ao checar estoque Shopee: {e}")
+
+    for deal in active_deals:
+        msg_id = deal.get("telegram_message_id")
+        end_time = deal.get("end_time", 0)
+        pid = deal.get("product_id")
+
+        if not msg_id:
+            continue
+
+        should_delete = False
+        reason = ""
+
+        # 1. Checa se o horário da promoção expirou
+        if end_time and current_ts >= end_time:
+            should_delete = True
+            reason = "Promoção expirou"
+
+        # 2. Se o produto estava no Flash Sale e o estoque zerou
+        if pid in flash_stocks and flash_stocks[pid]["stock"] <= 0:
+            should_delete = True
+            reason = "Estoque esgotado"
+
+        if should_delete:
+            print(f"[Auto-Remoção] 🗑️ Apagando do Telegram ({reason}): {deal.get('title', '')[:35]}...")
+            telegram.delete_message(target_chat, msg_id)
+            mark_deal_inactive(pid)
+
 def run_deal_scanner(telegram: TelegramClient, chat_id: str = None, max_deals: int = None) -> int:
     """Scans for new deals and dispatches them to Telegram."""
     target_chat = chat_id or Config.TELEGRAM_CHAT_ID
@@ -206,9 +282,9 @@ def run_deal_scanner(telegram: TelegramClient, chat_id: str = None, max_deals: i
             break
 
         print(f"  📤 Enviando [{deal['platform']}]: {deal['title'][:40]}... ({deal['discount_percent']}% OFF)")
-        success = telegram.send_deal(target_chat, deal)
-        if success:
-            save_deal(deal)
+        msg_id = telegram.send_deal(target_chat, deal)
+        if msg_id:
+            save_deal(deal, message_id=msg_id)
             sent_count += 1
             time.sleep(2)  # brief pause to avoid Telegram rate limits
 
@@ -302,6 +378,23 @@ def handle_telegram_updates(telegram: TelegramClient):
                         text, kb = build_panel_data()
                         telegram.edit_message_text(chat_id, msg_id, text, reply_markup=kb)
 
+                    elif data == "cycle_repeat":
+                        repeat_presets = ["2", "3", "7", "30"]
+                        repeat_labels = {
+                            "2": "Após 2 dias",
+                            "3": "Após 3 dias",
+                            "7": "Após 7 dias",
+                            "30": "Nunca (30 dias)"
+                        }
+                        curr = get_setting("repeat_days", "2")
+                        next_idx = (repeat_presets.index(curr) + 1) % len(repeat_presets) if curr in repeat_presets else 0
+                        new_val = repeat_presets[next_idx]
+
+                        set_setting("repeat_days", new_val)
+                        telegram.answer_callback_query(cb_id, text=f"🔄 Repetição configurada para: {repeat_labels[new_val]}!")
+                        text, kb = build_panel_data()
+                        telegram.edit_message_text(chat_id, msg_id, text, reply_markup=kb)
+
                     elif data == "trigger_deals":
                         telegram.answer_callback_query(cb_id, text="🔎 Buscando ofertas relâmpago agora...")
                         run_deal_scanner(telegram, chat_id=chat_id, max_deals=3)
@@ -361,6 +454,9 @@ def handle_telegram_updates(telegram: TelegramClient):
                     h_str = "24h (Sem pausa)" if start_h == 0 and end_h == 24 else f"{start_h:02d}h às {end_h:02d}h"
                     days_map = {"todos": "Todos os dias", "seg-sex": "Seg a Sex", "seg-sab": "Seg a Sáb"}
                     d_str = days_map.get(get_setting("active_days", "todos"), "Todos os dias")
+                    rep_days = get_setting("repeat_days", "2")
+                    rep_map = {"2": "Após 2 dias", "3": "Após 3 dias", "7": "Após 7 dias", "30": "Nunca (30d)"}
+                    r_str = rep_map.get(rep_days, "Após 2 dias")
 
                     status_msg = (
                         f"📊 <b>Painel do Bot de Ofertas</b>\n\n"
@@ -368,9 +464,11 @@ def handle_telegram_updates(telegram: TelegramClient):
                         f"📦 <b>Total histórico de ofertas:</b> {stats['total']}\n"
                         f"⏰ <b>Horário ativo:</b> {h_str}\n"
                         f"📅 <b>Dias ativos:</b> {d_str}\n"
+                        f"🔄 <b>Repetir produtos:</b> {r_str}\n"
                         f"⏱️ <b>Verificação automática:</b> A cada {interval} minutos\n"
                         f"🏷️ <b>Desconto mínimo:</b> {min_disc}% OFF\n"
                         f"💬 <b>Frases nos produtos:</b> {c_status}\n"
+                        f"🗑️ <b>Auto-remover expirados:</b> Ativado na Shopee\n"
                         f"🛍️ <b>Plataforma ativa:</b> Shopee Oficial (Afiliada Bianca)"
                     )
                     telegram.send_message(chat_id, status_msg)
@@ -396,13 +494,14 @@ def handle_telegram_updates(telegram: TelegramClient):
         time.sleep(1)
 
 def scheduled_worker(telegram: TelegramClient):
-    """Background worker that periodically runs deal scans."""
+    """Background worker that periodically runs deal scans and cleans expired deals."""
     while True:
         try:
             # Respect dynamic interval from settings
             interval_minutes = int(get_setting("check_interval", str(Config.CHECK_INTERVAL_MINUTES)))
             interval_seconds = interval_minutes * 60
-            cleanup_old_deals(days=7)
+            cleanup_old_deals()
+            check_and_remove_expired_deals(telegram)
 
             in_schedule, reason = is_within_schedule()
             if in_schedule:
