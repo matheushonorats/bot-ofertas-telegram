@@ -2,17 +2,16 @@ services:
   - type: web
     name: bot-ofertas-telegram
     runtime: python
+    plan: free
     buildCommand: pip install -r requirements.txt
     startCommand: python bot.py
-    plan: free
-    autoDeploy: true
     envVars:
       - key: TELEGRAM_BOT_TOKEN
-        value: 9008203698:AAFsDnRYhtmwPGRSMKZ0RHvCccdlDVC-THc
+        value: "9008203698:AAFsDnRYhtmwPGRSMKZ0RHvCccdlDVC-THc"
       - key: TELEGRAM_CHAT_ID
         value: "-5409781483"
       - key: SHOPEE_AFFILIATE_TAG
-        value: utm_source=an_18345610975&utm_medium=affiliates&mmp_pid=an_18345610975&sub_id=whatsapp
+        value: "utm_source=an_18345610975&utm_medium=affiliates&mmp_pid=an_18345610975&sub_id=whatsapp"
       - key: CHECK_INTERVAL_MINUTES
         value: "30"
       - key: MIN_DISCOUNT_PERCENT
