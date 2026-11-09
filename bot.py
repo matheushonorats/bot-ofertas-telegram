@@ -112,35 +112,42 @@ def build_panel_data():
     }
     return text, keyboard
 
-def get_bianca_presentation() -> str:
-    """Returns the personalized presentation message for Bianca."""
-    return (
-        "👋 <b>Olá, Bianca! Prazer em te conhecer!</b>\n\n"
-        "Eu sou o seu <b>Assistente de Ofertas da Shopee</b>, criado exclusivamente para "
-        "encontrar os melhores achados e abastecer o seu grupo de promoções com total facilidade! 🛍️✨\n\n"
-        "Aqui está como eu funciono e como você pode lucrar comigo todos os dias:\n\n"
-        "🔍 <b>1. Varredura Automática nas Nuvens</b>\n"
-        "Eu fico ligado nas nuvens buscando as <b>Ofertas Relâmpago da Shopee</b> com super descontos "
-        "reais e fotos em alta qualidade.\n\n"
-        "💰 <b>2. Seu Link de Afiliada Já Embutido</b>\n"
-        "Todas as ofertas que envio aqui já vêm com o seu código de afiliada (<code>an_18345610975</code>) "
-        "e a etiqueta do WhatsApp. Cada compra feita pelo seu link gera comissão para você!\n\n"
-        "📲 <b>3. Como Mandar no WhatsApp com 1 Toque</b>\n"
-        "Abaixo de cada oferta, você verá o botão azul: <b>[ 📲 Compartilhar no WhatsApp ]</b>.\n"
-        "Basta <b>dar 1 toque nele no seu celular</b>! O WhatsApp abre sozinho com a mensagem, prévia com foto, "
-        "preços e o seu link prontinhos. Você só seleciona o seu grupo e envia! Zero trabalho de copiar e colar.\n\n"
-        "⏰ <b>4. Horários e Dias de Trabalho</b>\n"
-        "Por padrão, trabalho apenas das <b>08h às 22h</b> para não enviar mensagens de madrugada. "
-        "Você pode personalizar os horários e dias pelo painel a qualquer momento!\n\n"
-        "⚙️ <b>5. Seu Painel de Opções (/painel)</b>\n"
-        "Você tem controle total! Digite <b>/painel</b> para:\n"
-        "• Ativar ou desativar as frases dos produtos.\n"
-        "• Escolher o horário de funcionamento e dias da semana.\n"
-        "• Mudar o intervalo de envio das ofertas.\n"
-        "• Alterar o desconto mínimo desejado.\n\n"
-        "💡 <i>Dica: Sempre que quiser novas promoções na mesma hora, basta tocar em <b>/ofertas</b> no menu!</i>\n\n"
-        "Estou pronto para fazer o seu grupo bombar! Boas vendas! 🚀💰"
+def get_bianca_presentation() -> tuple:
+    """Returns the personalized presentation message and activation button for Bianca."""
+    text = (
+        "👋 <b>Oi Bianca! Prazer em te conhecer!</b>\n\n"
+        "Eu sou o seu <b>Assistente de Ofertas da Shopee</b>, criado exclusivamente para facilitar a sua vida "
+        "e abastecer o seu grupo de WhatsApp com as melhores promoções todos os dias! 🛍️✨\n\n"
+        "Aqui está um resumo bem simples de como eu vou te ajudar a lucrar:\n\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n"
+        "🔍 <b>1. Como eu trabalho por você</b>\n"
+        "• Eu fico vigiando a Shopee o dia todo buscando apenas <b>super descontos reais</b> e fotos bonitas.\n"
+        "• <b>Seu link já embutido:</b> Todas as ofertas já saem com o seu código de afiliada (<code>an_18345610975</code>). Você ganha comissão em cada venda!\n"
+        "• <b>Auto-limpeza inteligente:</b> Se a promoção acabar ou o produto esgotar na Shopee, eu apago a mensagem aqui do Telegram sozinho para você nunca mandar link vencido no WhatsApp!\n"
+        "• <b>Respeito ao seu sono:</b> Trabalho apenas das <b>08h às 22h</b> para não te incomodar de madrugada.\n\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n"
+        "📲 <b>2. Como enviar no WhatsApp (2 formas bem fáceis):</b>\n\n"
+        "👉 <b>Opção A (Mais rápida - 1 Toque):</b>\n"
+        "Abaixo de cada oferta, toque no botão azul <b>[ 📲 Compartilhar no WhatsApp ]</b>. "
+        "O WhatsApp abre direto com a mensagem, preços e o seu link prontinhos. Ao enviar, o WhatsApp carrega a foto de capa na prévia do link automaticamente!\n\n"
+        "👉 <b>Opção B (Para enviar com a foto grande):</b>\n"
+        "Se quiser que a foto vá bem grandona:\n"
+        "1. Toque na <b>foto do produto</b> aqui no Telegram.\n"
+        "2. Toque no ícone de <b>Compartilhar</b> (a setinha) e escolha o WhatsApp.\n"
+        "3. A foto vai em alta resolução e o texto vai junto na legenda!\n\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n"
+        "⚙️ <b>3. Seu Painel de Opções (/painel)</b>\n"
+        "Você tem controle total! A qualquer momento digite <b>/painel</b> para ligar/desligar frases, "
+        "alterar horários ou dias de envio.\n\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n"
+        "👇 <b>Estou pronto! Para dar a largada oficial e receber as primeiras ofertas, toque no botão abaixo:</b>"
     )
+    keyboard = {
+        "inline_keyboard": [
+            [{"text": "🚀 Iniciar Trabalhos Oficialmente", "callback_data": "start_bot_official"}]
+        ]
+    }
+    return text, keyboard
 
 def setup_commands(telegram: TelegramClient):
     """Registers official command buttons in Telegram menu."""
@@ -395,6 +402,20 @@ def handle_telegram_updates(telegram: TelegramClient):
                         text, kb = build_panel_data()
                         telegram.edit_message_text(chat_id, msg_id, text, reply_markup=kb)
 
+                    elif data == "start_bot_official":
+                        set_setting("bot_activated", "true")
+                        telegram.answer_callback_query(cb_id, text="🚀 Trabalhos iniciados oficialmente com sucesso!", show_alert=True)
+                        confirm_msg = (
+                            "🎉 <b>Maravilha, Bianca! Robô ativado com sucesso!</b>\n\n"
+                            "A partir de agora estou conectado na Shopee e vou entregar as melhores ofertas aqui para você.\n\n"
+                            "⚙️ Este é o seu <b>Painel de Opções</b> (você pode acessá-lo sempre digitando /painel):"
+                        )
+                        telegram.send_message(chat_id, confirm_msg)
+                        panel_text, panel_kb = build_panel_data()
+                        telegram.send_message(chat_id, panel_text, reply_markup=panel_kb)
+                        # Envia imediatamente as primeiras ofertas para dar a largada oficial
+                        run_deal_scanner(telegram, chat_id=chat_id, max_deals=2)
+
                     elif data == "trigger_deals":
                         telegram.answer_callback_query(cb_id, text="🔎 Buscando ofertas relâmpago agora...")
                         run_deal_scanner(telegram, chat_id=chat_id, max_deals=3)
@@ -434,8 +455,8 @@ def handle_telegram_updates(telegram: TelegramClient):
                     telegram.send_message(chat_id, panel_text, reply_markup=panel_kb)
 
                 elif text.startswith("/bianca") or text.startswith("/apresentacao"):
-                    pres = get_bianca_presentation()
-                    telegram.send_message(chat_id, pres)
+                    pres_text, pres_kb = get_bianca_presentation()
+                    telegram.send_message(chat_id, pres_text, reply_markup=pres_kb)
 
                 elif text.startswith("/ofertas"):
                     telegram.send_message(chat_id, "🔎 Buscando as melhores ofertas relâmpago na Shopee agora, aguarde um instante...")
@@ -497,6 +518,11 @@ def scheduled_worker(telegram: TelegramClient):
     """Background worker that periodically runs deal scans and cleans expired deals."""
     while True:
         try:
+            # TRAVA ABSOLUTA: Só roda após a Bianca clicar no botão de ativação!
+            if get_setting("bot_activated", "false") != "true":
+                time.sleep(15)
+                continue
+
             # Respect dynamic interval from settings
             interval_minutes = int(get_setting("check_interval", str(Config.CHECK_INTERVAL_MINUTES)))
             interval_seconds = interval_minutes * 60
