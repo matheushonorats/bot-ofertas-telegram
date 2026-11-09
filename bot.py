@@ -2,7 +2,7 @@ import sys
 import time
 import threading
 import argparse
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 # Ensure UTF-8 output in Windows consoles
 if hasattr(sys.stdout, "reconfigure"):
@@ -18,19 +18,64 @@ from telegram_client import TelegramClient
 from formatter import format_whatsapp_message
 from web_server import start_health_server
 
+def is_within_schedule() -> tuple:
+    """
+    Checks if current time in Brazil (Brasilia UTC-3) matches the configured schedule.
+    Returns (is_allowed: bool, reason: str).
+    """
+    br_tz = timezone(timedelta(hours=-3))
+    now_br = datetime.now(br_tz)
+
+    active_days = get_setting("active_days", "todos")
+    weekday = now_br.weekday()  # 0=Monday, ..., 5=Saturday, 6=Sunday
+
+    if active_days == "seg-sex" and weekday >= 5:
+        return False, "Bot configurado para funcionar apenas de Segunda a Sexta."
+    if active_days == "seg-sab" and weekday == 6:
+        return False, "Bot configurado para funcionar de Segunda a Sábado (domingo pausado)."
+
+    start_hour = int(get_setting("start_hour", "8"))
+    end_hour = int(get_setting("end_hour", "22"))
+
+    if start_hour == 0 and end_hour == 24:
+        return True, "24 horas ativo"
+
+    current_hour = now_br.hour
+    if not (start_hour <= current_hour < end_hour):
+        return False, f"Fora do horário ({start_hour:02d}h às {end_hour:02d}h - Horário atual em Brasília: {current_hour:02d}h{now_br.minute:02d})"
+
+    return True, "Dentro do horário"
+
 def build_panel_data():
     """Builds text and inline keyboard for the interactive settings panel."""
     comments_active = get_setting("comments_enabled", "true") == "true"
     interval = get_setting("check_interval", str(Config.CHECK_INTERVAL_MINUTES))
     min_disc = get_setting("min_discount", str(Config.MIN_DISCOUNT_PERCENT))
+    start_hour = int(get_setting("start_hour", "8"))
+    end_hour = int(get_setting("end_hour", "22"))
+    active_days = get_setting("active_days", "todos")
 
-    status_str = "✅ ATIVADOS" if comments_active else "❌ DESATIVADOS"
+    if start_hour == 0 and end_hour == 24:
+        hours_str = "24h (Sem pausa)"
+    else:
+        hours_str = f"{start_hour:02d}h às {end_hour:02d}h"
+
+    days_map = {
+        "todos": "Todos os dias",
+        "seg-sex": "Segunda a Sexta",
+        "seg-sab": "Segunda a Sábado"
+    }
+    days_str = days_map.get(active_days, "Todos os dias")
+
+    status_str = "✅ ATIVADAS" if comments_active else "❌ DESATIVADAS"
     toggle_label = "💬 Frases: DESATIVAR" if comments_active else "💬 Frases: ATIVAR"
 
     text = (
         "⚙️ <b>Painel de Opções do Bot de Ofertas</b>\n\n"
-        "<i>Toque nos botões abaixo para ligar/desligar funções e personalizar os envios:</i>\n\n"
-        f"💬 <b>Frases Descontraídas:</b> <code>{status_str}</code>\n"
+        "<i>Toque nos botões abaixo para personalizar o comportamento do bot:</i>\n\n"
+        f"💬 <b>Frases nos Produtos:</b> <code>{status_str}</code>\n"
+        f"⏰ <b>Horário de Funcionamento:</b> <code>{hours_str}</code>\n"
+        f"📅 <b>Dias de Envio:</b> <code>{days_str}</code>\n"
         f"⏱️ <b>Intervalo Automático:</b> <code>A cada {interval} min</code>\n"
         f"🏷️ <b>Desconto Mínimo:</b> <code>{min_disc}% OFF</code>\n"
         f"🛍️ <b>Plataforma:</b> <code>Shopee (Afiliada Bianca)</code>\n"
@@ -40,10 +85,14 @@ def build_panel_data():
         "inline_keyboard": [
             [{"text": toggle_label, "callback_data": "toggle_comments"}],
             [
-                {"text": f"⏱️ Intervalo: {interval}m", "callback_data": "cycle_interval"},
+                {"text": f"⏰ Horário: {hours_str}", "callback_data": "cycle_hours"},
+                {"text": f"📅 Dias: {days_str}", "callback_data": "cycle_days"}
+            ],
+            [
+                {"text": f"⏱️ A cada: {interval}m", "callback_data": "cycle_interval"},
                 {"text": f"🏷️ Mínimo: {min_disc}%", "callback_data": "cycle_discount"}
             ],
-            [{"text": "🔎 Buscar Ofertas Agora", "callback_data": "trigger_deals"}]
+            [{"text": "🔎 Buscar Novas Ofertas Agora", "callback_data": "trigger_deals"}]
         ]
     }
     return text, keyboard
@@ -52,22 +101,26 @@ def get_bianca_presentation() -> str:
     """Returns the personalized presentation message for Bianca."""
     return (
         "👋 <b>Olá, Bianca! Prazer em te conhecer!</b>\n\n"
-        "Eu sou o seu <b>Assistente Pessoal de Ofertas da Shopee</b>, criado exclusivamente para "
-        "encontrar os melhores achados e abastecer o seu grupo de promoções com facilidade! 🛍️✨\n\n"
+        "Eu sou o seu <b>Assistente de Ofertas da Shopee</b>, criado exclusivamente para "
+        "encontrar os melhores achados e abastecer o seu grupo de promoções com total facilidade! 🛍️✨\n\n"
         "Aqui está como eu funciono e como você pode lucrar comigo todos os dias:\n\n"
-        "🔍 <b>1. Varredura 24 Horas nas Nuvens</b>\n"
-        "Eu fico ligado 24h por dia buscando as <b>Ofertas Relâmpago da Shopee</b> com super descontos "
+        "🔍 <b>1. Varredura Automática nas Nuvens</b>\n"
+        "Eu fico ligado nas nuvens buscando as <b>Ofertas Relâmpago da Shopee</b> com super descontos "
         "reais e fotos em alta qualidade.\n\n"
         "💰 <b>2. Seu Link de Afiliada Já Embutido</b>\n"
         "Todas as ofertas que envio aqui já vêm com o seu código de afiliada (<code>an_18345610975</code>) "
         "e a etiqueta do WhatsApp. Cada compra feita pelo seu link gera comissão para você!\n\n"
         "📲 <b>3. Como Mandar no WhatsApp com 1 Toque</b>\n"
         "Abaixo de cada oferta, você verá o botão azul: <b>[ 📲 Compartilhar no WhatsApp ]</b>.\n"
-        "Basta <b>dar 1 toque nele no seu celular</b>! O WhatsApp abre sozinho com a mensagem, fotos na prévia, "
+        "Basta <b>dar 1 toque nele no seu celular</b>! O WhatsApp abre sozinho com a mensagem, prévia com foto, "
         "preços e o seu link prontinhos. Você só seleciona o seu grupo e envia! Zero trabalho de copiar e colar.\n\n"
-        "⚙️ <b>4. Seu Painel de Opções (/painel)</b>\n"
+        "⏰ <b>4. Horários e Dias de Trabalho</b>\n"
+        "Por padrão, trabalho apenas das <b>08h às 22h</b> para não enviar mensagens de madrugada. "
+        "Você pode personalizar os horários e dias pelo painel a qualquer momento!\n\n"
+        "⚙️ <b>5. Seu Painel de Opções (/painel)</b>\n"
         "Você tem controle total! Digite <b>/painel</b> para:\n"
-        "• Ativar ou desativar as frases descontraídas.\n"
+        "• Ativar ou desativar as frases dos produtos.\n"
+        "• Escolher o horário de funcionamento e dias da semana.\n"
         "• Mudar o intervalo de envio das ofertas.\n"
         "• Alterar o desconto mínimo desejado.\n\n"
         "💡 <i>Dica: Sempre que quiser novas promoções na mesma hora, basta tocar em <b>/ofertas</b> no menu!</i>\n\n"
@@ -211,6 +264,44 @@ def handle_telegram_updates(telegram: TelegramClient):
                         text, kb = build_panel_data()
                         telegram.edit_message_text(chat_id, msg_id, text, reply_markup=kb)
 
+                    elif data == "cycle_hours":
+                        hour_presets = [
+                            (8, 22),
+                            (9, 21),
+                            (7, 23),
+                            (0, 24)
+                        ]
+                        curr_start = int(get_setting("start_hour", "8"))
+                        curr_end = int(get_setting("end_hour", "22"))
+                        curr_pair = (curr_start, curr_end)
+
+                        next_idx = (hour_presets.index(curr_pair) + 1) % len(hour_presets) if curr_pair in hour_presets else 0
+                        new_start, new_end = hour_presets[next_idx]
+
+                        set_setting("start_hour", str(new_start))
+                        set_setting("end_hour", str(new_end))
+
+                        desc = "24h (Sem pausa)" if new_start == 0 and new_end == 24 else f"{new_start:02d}h às {new_end:02d}h"
+                        telegram.answer_callback_query(cb_id, text=f"⏰ Horário alterado para {desc}!")
+                        text, kb = build_panel_data()
+                        telegram.edit_message_text(chat_id, msg_id, text, reply_markup=kb)
+
+                    elif data == "cycle_days":
+                        day_presets = ["todos", "seg-sex", "seg-sab"]
+                        day_names = {
+                            "todos": "Todos os dias",
+                            "seg-sex": "Segunda a Sexta",
+                            "seg-sab": "Segunda a Sábado"
+                        }
+                        curr = get_setting("active_days", "todos")
+                        next_idx = (day_presets.index(curr) + 1) % len(day_presets) if curr in day_presets else 0
+                        new_val = day_presets[next_idx]
+
+                        set_setting("active_days", new_val)
+                        telegram.answer_callback_query(cb_id, text=f"📅 Dias alterados para {day_names[new_val]}!")
+                        text, kb = build_panel_data()
+                        telegram.edit_message_text(chat_id, msg_id, text, reply_markup=kb)
+
                     elif data == "trigger_deals":
                         telegram.answer_callback_query(cb_id, text="🔎 Buscando ofertas relâmpago agora...")
                         run_deal_scanner(telegram, chat_id=chat_id, max_deals=3)
@@ -265,14 +356,21 @@ def handle_telegram_updates(telegram: TelegramClient):
                     min_disc = get_setting("min_discount", str(Config.MIN_DISCOUNT_PERCENT))
                     comments_active = get_setting("comments_enabled", "true") == "true"
                     c_status = "Ativadas" if comments_active else "Desativadas"
+                    start_h = int(get_setting("start_hour", "8"))
+                    end_h = int(get_setting("end_hour", "22"))
+                    h_str = "24h (Sem pausa)" if start_h == 0 and end_h == 24 else f"{start_h:02d}h às {end_h:02d}h"
+                    days_map = {"todos": "Todos os dias", "seg-sex": "Seg a Sex", "seg-sab": "Seg a Sáb"}
+                    d_str = days_map.get(get_setting("active_days", "todos"), "Todos os dias")
 
                     status_msg = (
                         f"📊 <b>Painel do Bot de Ofertas</b>\n\n"
                         f"🔥 <b>Ofertas enviadas hoje:</b> {stats['today']}\n"
                         f"📦 <b>Total histórico de ofertas:</b> {stats['total']}\n"
+                        f"⏰ <b>Horário ativo:</b> {h_str}\n"
+                        f"📅 <b>Dias ativos:</b> {d_str}\n"
                         f"⏱️ <b>Verificação automática:</b> A cada {interval} minutos\n"
                         f"🏷️ <b>Desconto mínimo:</b> {min_disc}% OFF\n"
-                        f"💬 <b>Frases descontraídas:</b> {c_status}\n"
+                        f"💬 <b>Frases nos produtos:</b> {c_status}\n"
                         f"🛍️ <b>Plataforma ativa:</b> Shopee Oficial (Afiliada Bianca)"
                     )
                     telegram.send_message(chat_id, status_msg)
@@ -305,7 +403,12 @@ def scheduled_worker(telegram: TelegramClient):
             interval_minutes = int(get_setting("check_interval", str(Config.CHECK_INTERVAL_MINUTES)))
             interval_seconds = interval_minutes * 60
             cleanup_old_deals(days=7)
-            run_deal_scanner(telegram)
+
+            in_schedule, reason = is_within_schedule()
+            if in_schedule:
+                run_deal_scanner(telegram)
+            else:
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] ⏸️ Envio automático pausado: {reason}")
         except Exception as e:
             print(f"[Erro no Agendador] {e}")
             interval_seconds = 600

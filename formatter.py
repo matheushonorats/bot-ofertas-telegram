@@ -29,7 +29,7 @@ def format_whatsapp_message(deal: dict) -> str:
     ]
 
     if comment:
-        lines.append(f"💬 _{comment}_")
+        lines.append(f"_{comment}_")
 
     lines.append("")
 

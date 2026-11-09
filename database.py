@@ -37,6 +37,9 @@ def init_db():
         cursor.execute("INSERT OR IGNORE INTO bot_settings (key, value) VALUES ('comments_enabled', 'true')")
         cursor.execute("INSERT OR IGNORE INTO bot_settings (key, value) VALUES ('check_interval', '10')")
         cursor.execute("INSERT OR IGNORE INTO bot_settings (key, value) VALUES ('min_discount', '15')")
+        cursor.execute("INSERT OR IGNORE INTO bot_settings (key, value) VALUES ('start_hour', '8')")
+        cursor.execute("INSERT OR IGNORE INTO bot_settings (key, value) VALUES ('end_hour', '22')")
+        cursor.execute("INSERT OR IGNORE INTO bot_settings (key, value) VALUES ('active_days', 'todos')")
         conn.commit()
 
 def get_setting(key: str, default: str = "") -> str:
