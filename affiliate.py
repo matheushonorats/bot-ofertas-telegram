@@ -5,6 +5,28 @@ import hashlib
 import requests
 from config import Config
 
+def shorten_url(url: str) -> str:
+    """Shortens a long affiliate URL using a free reliable service (TinyURL or is.gd)."""
+    if not url:
+        return ""
+    # 1. Try TinyURL
+    try:
+        resp = requests.get("https://tinyurl.com/api-create.php", params={"url": url}, timeout=6)
+        if resp.status_code == 200 and resp.text.startswith("https://tinyurl.com/"):
+            return resp.text.strip()
+    except Exception as e:
+        print(f"[Shortener] TinyURL falhou: {e}")
+
+    # 2. Try is.gd fallback
+    try:
+        resp = requests.get("https://is.gd/create.php", params={"format": "simple", "url": url}, timeout=6)
+        if resp.status_code == 200 and resp.text.startswith("https://is.gd/"):
+            return resp.text.strip()
+    except Exception as e:
+        print(f"[Shortener] is.gd falhou: {e}")
+
+    return url
+
 def generate_shopee_short_link(original_url: str) -> str:
     """
     Generates an official Shopee affiliate shortlink via Shopee Affiliate Open API
@@ -29,12 +51,11 @@ def generate_shopee_short_link(original_url: str) -> str:
     variables = {
         "input": {
             "originUrl": original_url,
-            "subIds": ["telegram_deals"]
+            "subIds": ["whatsapp"]
         }
     }
     payload = json.dumps({"query": query, "variables": variables}, separators=(',', ':'))
 
-    # Calculate HMAC-SHA256 signature
     factor = f"{app_id}{timestamp}{payload}{secret}"
     signature = hmac.new(
         secret.encode("utf-8"),
@@ -65,13 +86,14 @@ def format_ml_affiliate_link(url: str) -> str:
     template = Config.ML_AFFILIATE_URL_TEMPLATE
 
     if template:
-        return template.format(url=clean_url, tag=tag)
-
-    if tag:
+        final_url = template.format(url=clean_url, tag=tag)
+    elif tag:
         separator = "&" if "?" in clean_url else "?"
-        return f"{clean_url}{separator}{tag}"
+        final_url = f"{clean_url}{separator}{tag}"
+    else:
+        final_url = clean_url
 
-    return clean_url
+    return shorten_url(final_url)
 
 def format_shopee_affiliate_link(url: str, shop_id: str = "", item_id: str = "") -> str:
     """Formats Shopee product URL with affiliate shortlink, universal link or tracking tag."""
@@ -85,14 +107,19 @@ def format_shopee_affiliate_link(url: str, shop_id: str = "", item_id: str = "")
     clean_url = url.split("?")[0]
     if Config.SHOPEE_UNIVERSAL_LINK:
         if "{shop_id}" in Config.SHOPEE_UNIVERSAL_LINK and "{item_id}" in Config.SHOPEE_UNIVERSAL_LINK:
-            return Config.SHOPEE_UNIVERSAL_LINK.format(shop_id=shop_id, item_id=item_id)
-        separator = "&" if "?" in Config.SHOPEE_UNIVERSAL_LINK else "?"
-        return f"{Config.SHOPEE_UNIVERSAL_LINK}{separator}url={clean_url}"
+            final_url = Config.SHOPEE_UNIVERSAL_LINK.format(shop_id=shop_id, item_id=item_id)
+        else:
+            separator = "&" if "?" in Config.SHOPEE_UNIVERSAL_LINK else "?"
+            final_url = f"{Config.SHOPEE_UNIVERSAL_LINK}{separator}url={clean_url}"
+        return shorten_url(final_url)
 
-    # 3. Fallback: append tracking tag
+    # 3. Fallback: append tracking tag and shorten
     tag = Config.SHOPEE_AFFILIATE_TAG
     if tag:
         separator = "&" if "?" in clean_url else "?"
-        return f"{clean_url}{separator}{tag}"
+        final_url = f"{clean_url}{separator}{tag}"
+    else:
+        final_url = clean_url
 
-    return clean_url
+    # Automatically shorten the link to make it clean & appealing
+    return shorten_url(final_url)

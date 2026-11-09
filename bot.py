@@ -29,8 +29,12 @@ def run_dry_run_test():
     print(f"-> Encontradas {len(shopee_deals)} ofertas na Shopee com desconto >= {Config.MIN_DISCOUNT_PERCENT}%")
 
     print("\n🔍 2. Buscando ofertas no Mercado Livre...")
-    ml_deals = fetch_mercadolivre_deals(limit_per_category=2)
-    print(f"-> Encontradas {len(ml_deals)} ofertas no Mercado Livre com desconto >= {Config.MIN_DISCOUNT_PERCENT}%")
+    if Config.ML_AFFILIATE_TAG:
+        ml_deals = fetch_mercadolivre_deals(limit_per_category=2)
+        print(f"-> Encontradas {len(ml_deals)} ofertas no Mercado Livre com desconto >= {Config.MIN_DISCOUNT_PERCENT}%")
+    else:
+        ml_deals = []
+        print("-> Mercado Livre desativado (aguardando ML_AFFILIATE_TAG no .env)")
 
     all_deals = shopee_deals + ml_deals
     if not all_deals:
@@ -61,17 +65,21 @@ def run_deal_scanner(telegram: TelegramClient, chat_id: str = None, max_deals: i
     max_limit = max_deals or Config.MAX_DEALS_PER_RUN
     print(f"\n[{datetime.now().strftime('%H:%M:%S')}] 🔎 Iniciando varredura de ofertas...")
 
-    # Fetch from both platforms
+    # Fetch from platforms
     deals = []
     try:
         deals.extend(fetch_shopee_deals(limit=15))
     except Exception as e:
         print(f"[Erro] Falha ao coletar Shopee: {e}")
 
-    try:
-        deals.extend(fetch_mercadolivre_deals(limit_per_category=3))
-    except Exception as e:
-        print(f"[Erro] Falha ao coletar Mercado Livre: {e}")
+    # Só busca no Mercado Livre se o usuário tiver configurado a tag de afiliado do ML
+    if Config.ML_AFFILIATE_TAG:
+        try:
+            deals.extend(fetch_mercadolivre_deals(limit_per_category=3))
+        except Exception as e:
+            print(f"[Erro] Falha ao coletar Mercado Livre: {e}")
+    else:
+        print("[Info] Mercado Livre desativado (aguardando configuracao de ML_AFFILIATE_TAG)")
 
     # Sort deals by discount percentage (highest first)
     deals.sort(key=lambda x: x.get("discount_percent", 0), reverse=True)

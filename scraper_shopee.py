@@ -51,9 +51,15 @@ def fetch_shopee_deals(limit=20):
             if discount_percent < Config.MIN_DISCOUNT_PERCENT:
                 continue
 
-            # Image
-            image_hash = item.get("image", "")
-            image_url = f"https://down-br.img.susercontent.com/file/{image_hash}" if image_hash else ""
+            # Image (Garante que só envia ofertas com foto)
+            image_hash = item.get("image") or ""
+            if not image_hash and item.get("promo_images"):
+                image_hash = item.get("promo_images")[0]
+
+            if not image_hash:
+                continue
+
+            image_url = f"https://down-br.img.susercontent.com/file/{image_hash}"
 
             # Product URL & Affiliate conversion
             product_url = f"https://shopee.com.br/product/{shop_id}/{item_id}"
