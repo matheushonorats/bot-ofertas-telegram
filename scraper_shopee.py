@@ -33,7 +33,7 @@ def fetch_shopee_deals(limit=50):
                 continue
 
             product_id = f"shopee_{shop_id}_{item_id}"
-            if is_deal_seen(product_id):
+            if is_deal_seen(product_id, title=name):
                 continue
 
             # Price calculations (Shopee divides prices by 100,000)

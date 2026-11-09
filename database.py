@@ -23,13 +23,35 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # Index on product_id and title for ultra fast duplicate checks
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_seen_deals_pid ON seen_deals(product_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_seen_deals_title ON seen_deals(title)")
         conn.commit()
 
-def is_deal_seen(product_id: str) -> bool:
+def is_deal_seen(product_id: str, title: str = "") -> bool:
+    """
+    Double protection against duplicates:
+    1. Checks if the unique product_id was already sent.
+    2. Checks if an identical title was already sent in the last 48 hours.
+    """
     with get_connection() as conn:
         cursor = conn.cursor()
+        # Check by product ID
         cursor.execute("SELECT 1 FROM seen_deals WHERE product_id = ?", (product_id,))
-        return cursor.fetchone() is not None
+        if cursor.fetchone() is not None:
+            return True
+
+        # Check by Title (prevents re-listings of the same item)
+        if title:
+            clean_title = title.strip()
+            cursor.execute("""
+                SELECT 1 FROM seen_deals 
+                WHERE title = ? AND created_at >= datetime('now', '-2 days')
+            """, (clean_title,))
+            if cursor.fetchone() is not None:
+                return True
+
+        return False
 
 def save_deal(deal: dict):
     with get_connection() as conn:
@@ -42,7 +64,7 @@ def save_deal(deal: dict):
             """, (
                 deal.get("id"),
                 deal.get("platform"),
-                deal.get("title"),
+                deal.get("title", "").strip(),
                 float(deal.get("current_price", 0.0)),
                 float(deal.get("original_price", 0.0)),
                 int(deal.get("discount_percent", 0)),
