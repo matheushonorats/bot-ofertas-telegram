@@ -51,7 +51,7 @@ def init_db():
         cursor.execute("INSERT OR IGNORE INTO bot_settings (key, value) VALUES ('end_hour', '22')")
         cursor.execute("INSERT OR IGNORE INTO bot_settings (key, value) VALUES ('active_days', 'todos')")
         cursor.execute("INSERT OR IGNORE INTO bot_settings (key, value) VALUES ('repeat_days', '2')")
-        cursor.execute("INSERT OR IGNORE INTO bot_settings (key, value) VALUES ('bot_activated', 'false')")
+        cursor.execute("INSERT OR IGNORE INTO bot_settings (key, value) VALUES ('bot_activated', 'true')")
         conn.commit()
 
 def get_setting(key: str, default: str = "") -> str:

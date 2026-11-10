@@ -518,11 +518,6 @@ def scheduled_worker(telegram: TelegramClient):
     """Background worker that periodically runs deal scans and cleans expired deals."""
     while True:
         try:
-            # TRAVA ABSOLUTA: Só roda após a Bianca clicar no botão de ativação!
-            if get_setting("bot_activated", "false") != "true":
-                time.sleep(15)
-                continue
-
             # Respect dynamic interval from settings
             interval_minutes = int(get_setting("check_interval", str(Config.CHECK_INTERVAL_MINUTES)))
             interval_seconds = interval_minutes * 60
