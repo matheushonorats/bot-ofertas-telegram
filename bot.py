@@ -494,6 +494,16 @@ def handle_telegram_updates(telegram: TelegramClient):
                     )
                     telegram.send_message(chat_id, status_msg)
 
+                elif text.startswith("/dbcheck"):
+                    from database import USE_POSTGRES, DATABASE_URL
+                    db_type = "✅ PostgreSQL (persistente)" if USE_POSTGRES else "⚠️ SQLite (efêmero - repete após redeploy!)"
+                    db_url_hint = DATABASE_URL[:30] + "..." if DATABASE_URL else "❌ Não configurado"
+                    telegram.send_message(chat_id, (
+                        f"🗄️ <b>Status do Banco de Dados</b>\n\n"
+                        f"<b>Tipo:</b> {db_type}\n"
+                        f"<b>DATABASE_URL:</b> <code>{db_url_hint}</code>"
+                    ))
+
                 elif text.startswith("/ajuda"):
                     help_msg = (
                         "❓ <b>Como compartilhar as ofertas no WhatsApp:</b>\n\n"
