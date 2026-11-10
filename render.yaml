@@ -12,6 +12,10 @@ services:
         value: "-1004316736020"
       - key: SHOPEE_AFFILIATE_TAG
         value: "utm_source=an_18345610975&utm_medium=affiliates&mmp_pid=an_18345610975&sub_id=whatsapp"
+      - key: ML_AFFILIATE_TAG
+        value: "matt_tool=47323108&matt_word=sobi5226995&forceInApp=true"
+      - key: GEMINI_API_KEY
+        sync: false
       - key: CHECK_INTERVAL_MINUTES
         value: "10"
       - key: MIN_DISCOUNT_PERCENT

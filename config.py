@@ -54,6 +54,9 @@ class Config:
     SHOPEE_AFFILIATE_TAG = os.getenv("SHOPEE_AFFILIATE_TAG", "sub_id=telegram").strip()
     SHOPEE_UNIVERSAL_LINK = os.getenv("SHOPEE_UNIVERSAL_LINK", "").strip()
 
+    # AI (Gemini) for custom contextual product phrases
+    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+
     # Database
     DB_PATH = BASE_DIR / "deals.db"
 

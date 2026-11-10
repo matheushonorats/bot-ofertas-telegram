@@ -92,7 +92,7 @@ def build_panel_data():
         f"🔄 <b>Repetir Produtos:</b> <code>{repeat_str}</code>\n"
         f"⏱️ <b>Intervalo Automático:</b> <code>A cada {interval} min</code>\n"
         f"🏷️ <b>Desconto Mínimo:</b> <code>{min_disc}% OFF</code>\n"
-        f"🛍️ <b>Plataforma:</b> <code>Shopee (Afiliada Bianca)</code>\n"
+        f"🛍️ <b>Plataformas:</b> <code>Shopee & Mercado Livre (Afiliada Bianca)</code>\n"
     )
 
     keyboard = {
@@ -459,7 +459,7 @@ def handle_telegram_updates(telegram: TelegramClient):
                     telegram.send_message(chat_id, pres_text, reply_markup=pres_kb)
 
                 elif text.startswith("/ofertas"):
-                    telegram.send_message(chat_id, "🔎 Buscando as melhores ofertas relâmpago na Shopee agora, aguarde um instante...")
+                    telegram.send_message(chat_id, "🔎 Buscando as melhores ofertas relâmpago na Shopee e no Mercado Livre agora, aguarde um instante...")
                     sent = run_deal_scanner(telegram, chat_id=chat_id, max_deals=3)
                     if sent == 0:
                         telegram.send_message(chat_id, "ℹ️ Nenhuma nova oferta com super desconto encontrada no momento. Buscarei novamente em breve!")
@@ -489,8 +489,8 @@ def handle_telegram_updates(telegram: TelegramClient):
                         f"⏱️ <b>Verificação automática:</b> A cada {interval} minutos\n"
                         f"🏷️ <b>Desconto mínimo:</b> {min_disc}% OFF\n"
                         f"💬 <b>Frases nos produtos:</b> {c_status}\n"
-                        f"🗑️ <b>Auto-remover expirados:</b> Ativado na Shopee\n"
-                        f"🛍️ <b>Plataforma ativa:</b> Shopee Oficial (Afiliada Bianca)"
+                        f"🗑️ <b>Auto-remover expirados:</b> Ativado (Shopee & ML)\n"
+                        f"🛍️ <b>Plataformas ativas:</b> Shopee & Mercado Livre (Afiliada Bianca)"
                     )
                     telegram.send_message(chat_id, status_msg)
 

@@ -18,7 +18,7 @@ def format_whatsapp_message(deal: dict) -> str:
 
     # Relaxed comment tailored to product (respects user panel toggle)
     comments_active = get_setting("comments_enabled", "true") == "true"
-    comment = get_relaxed_comment(title, category) if comments_active else ""
+    comment = get_relaxed_comment(title, category, platform=platform) if comments_active else ""
 
     header = f"🔥 *SUPER OFERTA NA {platform.upper()}!* 🔥" if platform.lower() == "shopee" else f"🔥 *SUPER OFERTA NO {platform.upper()}!* 🔥"
 

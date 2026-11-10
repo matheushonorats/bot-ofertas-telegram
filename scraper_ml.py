@@ -1,4 +1,5 @@
 import re
+import time
 from curl_cffi import requests
 from bs4 import BeautifulSoup
 from config import Config
@@ -130,7 +131,9 @@ def fetch_mercadolivre_deals(limit_per_category=5):
                     "discount_percent": discount_percent,
                     "link": affiliate_link,
                     "image": img_url,
-                    "category": cat_clean
+                    "category": cat_clean,
+                    "end_time": int(time.time() + 86400 * 2),
+                    "stock": 10
                 })
                 count += 1
 
