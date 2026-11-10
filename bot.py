@@ -265,29 +265,40 @@ def run_deal_scanner(telegram: TelegramClient, chat_id: str = None, max_deals: i
         return 0
 
     max_limit = max_deals or Config.MAX_DEALS_PER_RUN
-    print(f"\n[{datetime.now().strftime('%H:%M:%S')}] 🔎 Iniciando varredura de ofertas...")
+    print(f"\n[{datetime.now().strftime('%H:%M:%S')}] 🔎 Iniciando varredura de ofertas (limite: {max_limit})...")
 
-    deals = []
+    shopee_deals = []
+    ml_deals = []
+
     try:
-        deals.extend(fetch_shopee_deals(limit=50))
+        shopee_deals = fetch_shopee_deals(limit=50)
     except Exception as e:
         print(f"[Erro] Falha ao coletar Shopee: {e}")
 
     # Só busca no Mercado Livre se houver ML_AFFILIATE_TAG configurada
     if Config.ML_AFFILIATE_TAG:
         try:
-            deals.extend(fetch_mercadolivre_deals(limit_per_category=3))
+            ml_deals = fetch_mercadolivre_deals(limit_per_category=3)
         except Exception as e:
             print(f"[Erro] Falha ao coletar Mercado Livre: {e}")
 
-    # Sort deals by discount percentage (highest first)
-    deals.sort(key=lambda x: x.get("discount_percent", 0), reverse=True)
+    # Ordena cada plataforma individualmente pelo maior desconto
+    shopee_deals.sort(key=lambda x: x.get("discount_percent", 0), reverse=True)
+    ml_deals.sort(key=lambda x: x.get("discount_percent", 0), reverse=True)
+
+    # Intercala Mercado Livre e Shopee para garantir que AMBAS apareçam no grupo
+    selected_deals = []
+    idx_s, idx_m = 0, 0
+    while len(selected_deals) < max_limit and (idx_s < len(shopee_deals) or idx_m < len(ml_deals)):
+        if idx_m < len(ml_deals) and len(selected_deals) < max_limit:
+            selected_deals.append(ml_deals[idx_m])
+            idx_m += 1
+        if idx_s < len(shopee_deals) and len(selected_deals) < max_limit:
+            selected_deals.append(shopee_deals[idx_s])
+            idx_s += 1
 
     sent_count = 0
-    for deal in deals:
-        if sent_count >= max_limit:
-            break
-
+    for deal in selected_deals:
         print(f"  📤 Enviando [{deal['platform']}]: {deal['title'][:40]}... ({deal['discount_percent']}% OFF)")
         msg_id = telegram.send_deal(target_chat, deal)
         if msg_id:

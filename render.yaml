@@ -22,3 +22,7 @@ services:
         value: "15"
       - key: MAX_DEALS_PER_RUN
         value: "3"
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: DATABASE_URL
+        sync: false

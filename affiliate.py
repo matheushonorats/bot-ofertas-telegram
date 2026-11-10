@@ -6,24 +6,19 @@ import requests
 from config import Config
 
 def shorten_url(url: str) -> str:
-    """Shortens a long affiliate URL using a free reliable service (TinyURL or is.gd)."""
+    """
+    Shortens a long affiliate URL using is.gd (safe, preserves exact query parameters).
+    Never uses Viglink or intermediary ad redirectors.
+    Fallback: returns the clean original URL directly.
+    """
     if not url:
         return ""
-    # 1. Try TinyURL
     try:
-        resp = requests.get("https://tinyurl.com/api-create.php", params={"url": url}, timeout=6)
-        if resp.status_code == 200 and resp.text.startswith("https://tinyurl.com/"):
-            return resp.text.strip()
-    except Exception as e:
-        print(f"[Shortener] TinyURL falhou: {e}")
-
-    # 2. Try is.gd fallback
-    try:
-        resp = requests.get("https://is.gd/create.php", params={"format": "simple", "url": url}, timeout=6)
+        resp = requests.get("https://is.gd/create.php", params={"format": "simple", "url": url}, timeout=5)
         if resp.status_code == 200 and resp.text.startswith("https://is.gd/"):
             return resp.text.strip()
     except Exception as e:
-        print(f"[Shortener] is.gd falhou: {e}")
+        print(f"[Shortener] is.gd indisponível ({e}), mantendo link direto.")
 
     return url
 

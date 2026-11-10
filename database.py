@@ -1,6 +1,6 @@
 import os
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from config import Config
 
 # ---------------------------------------------------------------------------
@@ -18,9 +18,9 @@ if USE_POSTGRES:
     try:
         import psycopg2
         import psycopg2.extras
-        print(f"[DB] ✅ Usando PostgreSQL persistente")
+        print("[DB] ✅ Conexão PostgreSQL configurada")
     except ImportError:
-        print("[DB] ⚠️ psycopg2 não encontrado, caindo para SQLite")
+        print("[DB] ⚠️ psycopg2 não instalado, caindo para SQLite")
         USE_POSTGRES = False
 else:
     print(f"[DB] 📁 Usando SQLite local: {Config.DB_PATH}")
@@ -31,9 +31,15 @@ else:
 # ---------------------------------------------------------------------------
 
 def get_connection():
+    global USE_POSTGRES
     if USE_POSTGRES:
-        conn = psycopg2.connect(DATABASE_URL)
-        return conn
+        try:
+            return psycopg2.connect(DATABASE_URL)
+        except Exception as e:
+            print(f"[DB] ⚠️ Falha ao conectar no PostgreSQL: {e}. Usando SQLite temporariamente.")
+            conn = sqlite3.connect(Config.DB_PATH)
+            conn.row_factory = sqlite3.Row
+            return conn
     else:
         conn = sqlite3.connect(Config.DB_PATH)
         conn.row_factory = sqlite3.Row
@@ -41,25 +47,10 @@ def get_connection():
 
 
 def _placeholder():
-    """Return the correct SQL placeholder for the active backend."""
     return "%s" if USE_POSTGRES else "?"
 
 
-def _fetchone_as_dict(cursor):
-    """Return a single row as dict regardless of backend."""
-    if USE_POSTGRES:
-        row = cursor.fetchone()
-        if row is None:
-            return None
-        cols = [desc[0] for desc in cursor.description]
-        return dict(zip(cols, row))
-    else:
-        row = cursor.fetchone()
-        return dict(row) if row else None
-
-
 def _fetchall_as_dicts(cursor):
-    """Return all rows as list of dicts regardless of backend."""
     if USE_POSTGRES:
         cols = [desc[0] for desc in cursor.description]
         return [dict(zip(cols, row)) for row in cursor.fetchall()]
@@ -72,7 +63,6 @@ def _fetchall_as_dicts(cursor):
 # ---------------------------------------------------------------------------
 
 def init_db():
-    ph = _placeholder()
     conn = get_connection()
     try:
         cursor = conn.cursor()
@@ -119,7 +109,6 @@ def init_db():
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_seen_deals_pid ON seen_deals(product_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_seen_deals_title ON seen_deals(title)")
 
-            # Migration: ensure extra columns exist in SQLite
             cursor.execute("PRAGMA table_info(seen_deals)")
             columns = [col[1] for col in cursor.fetchall()]
             if "telegram_message_id" not in columns:
@@ -136,7 +125,6 @@ def init_db():
                 )
             """)
 
-        # Default settings (INSERT OR IGNORE equivalent for each backend)
         defaults = [
             ("comments_enabled", "true"),
             ("check_interval", "10"),
@@ -175,9 +163,7 @@ def get_setting(key: str, default: str = "") -> str:
         cursor = conn.cursor()
         cursor.execute(f"SELECT value FROM bot_settings WHERE key = {ph}", (key,))
         row = cursor.fetchone()
-        if row is None:
-            return default
-        return row[0] if USE_POSTGRES else row[0]
+        return row[0] if row else default
     finally:
         conn.close()
 
@@ -213,38 +199,24 @@ def is_deal_seen(product_id: str, title: str = "") -> bool:
     2. Checks if an identical title was already sent within repeat_days.
     """
     repeat_days = int(get_setting("repeat_days", "2"))
+    cutoff = datetime.now(timezone.utc) - timedelta(days=repeat_days)
     ph = _placeholder()
     conn = get_connection()
     try:
         cursor = conn.cursor()
-
-        if USE_POSTGRES:
-            cursor.execute(
-                "SELECT 1 FROM seen_deals WHERE product_id = %s AND created_at >= NOW() - INTERVAL '%s days'",
-                (product_id, repeat_days)
-            )
-        else:
-            cutoff = f"-{repeat_days} days"
-            cursor.execute(
-                "SELECT 1 FROM seen_deals WHERE product_id = ? AND created_at >= datetime('now', ?)",
-                (product_id, cutoff)
-            )
+        cursor.execute(
+            f"SELECT 1 FROM seen_deals WHERE product_id = {ph} AND created_at >= {ph}",
+            (product_id, cutoff)
+        )
         if cursor.fetchone() is not None:
             return True
 
         if title:
             clean_title = title.strip().lower()
-            if USE_POSTGRES:
-                cursor.execute(
-                    "SELECT 1 FROM seen_deals WHERE LOWER(title) = %s AND created_at >= NOW() - INTERVAL '%s days'",
-                    (clean_title, repeat_days)
-                )
-            else:
-                cutoff = f"-{repeat_days} days"
-                cursor.execute(
-                    "SELECT 1 FROM seen_deals WHERE LOWER(title) = ? AND created_at >= datetime('now', ?)",
-                    (clean_title, cutoff)
-                )
+            cursor.execute(
+                f"SELECT 1 FROM seen_deals WHERE LOWER(title) = {ph} AND created_at >= {ph}",
+                (clean_title, cutoff)
+            )
             if cursor.fetchone() is not None:
                 return True
 
@@ -346,11 +318,9 @@ def get_stats():
         cursor.execute("SELECT COUNT(*) FROM seen_deals")
         total = cursor.fetchone()[0]
 
-        if USE_POSTGRES:
-            cursor.execute("SELECT COUNT(*) FROM seen_deals WHERE created_at >= CURRENT_DATE")
-        else:
-            today_start = datetime.now().strftime("%Y-%m-%d 00:00:00")
-            cursor.execute("SELECT COUNT(*) FROM seen_deals WHERE created_at >= ?", (today_start,))
+        ph = _placeholder()
+        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        cursor.execute(f"SELECT COUNT(*) FROM seen_deals WHERE created_at >= {ph}", (today_start,))
         today = cursor.fetchone()[0]
 
         cursor.execute("SELECT platform, COUNT(*) FROM seen_deals GROUP BY platform")
@@ -370,17 +340,12 @@ def cleanup_old_deals(days=None):
         repeat_days = int(get_setting("repeat_days", "2"))
         days = max(repeat_days * 2, 14)
 
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    ph = _placeholder()
     conn = get_connection()
     try:
         cursor = conn.cursor()
-        if USE_POSTGRES:
-            cursor.execute(
-                "DELETE FROM seen_deals WHERE created_at < NOW() - INTERVAL '%s days'",
-                (days,)
-            )
-        else:
-            cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
-            cursor.execute("DELETE FROM seen_deals WHERE created_at < ?", (cutoff,))
+        cursor.execute(f"DELETE FROM seen_deals WHERE created_at < {ph}", (cutoff,))
         deleted = cursor.rowcount
         conn.commit()
         return deleted

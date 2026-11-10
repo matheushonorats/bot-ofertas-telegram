@@ -65,7 +65,7 @@ def fetch_mercadolivre_deals(limit_per_category=5):
                 mlb_match = re.search(r"(MLB-?\d+)", clean_link)
                 product_id = f"ml_{mlb_match.group(1).replace('-', '')}" if mlb_match else f"ml_{clean_link}"
 
-                if is_deal_seen(product_id):
+                if is_deal_seen(product_id, title=title):
                     continue
 
                 # Image
