@@ -89,11 +89,13 @@ def fetch_mercadolivre_deals(limit_per_category=5):
                 if is_deal_seen(product_id, title=title):
                     continue
 
-                # Image
+                # Image (convert ML .webp to .jpg for universal WhatsApp/OpenGraph support)
                 img_el = card.select_one("img")
                 img_url = ""
                 if img_el:
-                    img_url = img_el.get("data-src") or img_el.get("src") or ""
+                    candidate = img_el.get("data-src") or img_el.get("src") or ""
+                    if candidate.startswith("http"):
+                        img_url = candidate[:-5] + ".jpg" if candidate.endswith(".webp") else candidate
 
                 # Current price
                 price_container = card.select_one(".poly-price__current") or card

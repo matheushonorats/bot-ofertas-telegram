@@ -72,6 +72,8 @@ def _init_sqlite_schema(conn):
         cursor.execute("ALTER TABLE seen_deals ADD COLUMN end_time INTEGER")
     if "is_active" not in columns:
         cursor.execute("ALTER TABLE seen_deals ADD COLUMN is_active INTEGER DEFAULT 1")
+    if "image_url" not in columns:
+        cursor.execute("ALTER TABLE seen_deals ADD COLUMN image_url TEXT DEFAULT ''")
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS bot_settings (
@@ -142,9 +144,11 @@ def init_db():
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     telegram_message_id INTEGER,
                     end_time BIGINT,
-                    is_active INTEGER DEFAULT 1
+                    is_active INTEGER DEFAULT 1,
+                    image_url TEXT DEFAULT ''
                 )
             """)
+            cursor.execute("ALTER TABLE seen_deals ADD COLUMN IF NOT EXISTS image_url TEXT DEFAULT ''")
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS bot_settings (
                     key TEXT PRIMARY KEY,
@@ -264,19 +268,26 @@ def is_deal_seen(product_id: str, title: str = "") -> bool:
 def save_deal(deal: dict, message_id: int = None):
     conn = get_connection()
     is_pg = _is_pg(conn)
+    image_url = deal.get("image", "") or ""
     try:
         cursor = conn.cursor()
         if is_pg:
             cursor.execute("""
                 INSERT INTO seen_deals (
                     product_id, platform, title, price, original_price, discount_percent, url,
-                    telegram_message_id, end_time, is_active, created_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 1, CURRENT_TIMESTAMP)
+                    telegram_message_id, end_time, is_active, image_url, created_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 1, %s, CURRENT_TIMESTAMP)
                 ON CONFLICT (product_id) DO UPDATE
-                    SET telegram_message_id = EXCLUDED.telegram_message_id,
+                    SET price = EXCLUDED.price,
+                        original_price = EXCLUDED.original_price,
+                        discount_percent = EXCLUDED.discount_percent,
+                        url = EXCLUDED.url,
+                        image_url = EXCLUDED.image_url,
+                        telegram_message_id = COALESCE(EXCLUDED.telegram_message_id, seen_deals.telegram_message_id),
                         end_time = EXCLUDED.end_time,
                         is_active = 1,
                         created_at = CURRENT_TIMESTAMP
+                RETURNING id
             """, (
                 deal.get("id"),
                 deal.get("platform"),
@@ -286,14 +297,17 @@ def save_deal(deal: dict, message_id: int = None):
                 int(deal.get("discount_percent", 0)),
                 deal.get("link"),
                 message_id,
-                int(deal.get("end_time", 0))
+                int(deal.get("end_time", 0)),
+                image_url,
             ))
+            row = cursor.fetchone()
+            deal_db_id = row[0] if row else None
         else:
             cursor.execute("""
                 INSERT OR IGNORE INTO seen_deals (
                     product_id, platform, title, price, original_price, discount_percent, url,
-                    telegram_message_id, end_time, is_active
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+                    telegram_message_id, end_time, is_active, image_url
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
             """, (
                 deal.get("id"),
                 deal.get("platform"),
@@ -303,19 +317,76 @@ def save_deal(deal: dict, message_id: int = None):
                 int(deal.get("discount_percent", 0)),
                 deal.get("link"),
                 message_id,
-                int(deal.get("end_time", 0))
+                int(deal.get("end_time", 0)),
+                image_url,
             ))
-            if message_id:
-                cursor.execute("""
-                    UPDATE seen_deals
-                    SET telegram_message_id = ?, end_time = ?, is_active = 1, created_at = CURRENT_TIMESTAMP
-                    WHERE product_id = ?
-                """, (message_id, int(deal.get("end_time", 0)), deal.get("id")))
+            cursor.execute("""
+                UPDATE seen_deals
+                SET price = ?,
+                    original_price = ?,
+                    discount_percent = ?,
+                    url = ?,
+                    image_url = ?,
+                    telegram_message_id = COALESCE(?, telegram_message_id),
+                    end_time = ?,
+                    is_active = 1,
+                    created_at = CURRENT_TIMESTAMP
+                WHERE product_id = ?
+            """, (
+                float(deal.get("current_price", 0.0)),
+                float(deal.get("original_price", 0.0)),
+                int(deal.get("discount_percent", 0)),
+                deal.get("link"),
+                image_url,
+                message_id,
+                int(deal.get("end_time", 0)),
+                deal.get("id"),
+            ))
+            cursor.execute("SELECT id FROM seen_deals WHERE product_id = ?", (deal.get("id"),))
+            row = cursor.fetchone()
+            deal_db_id = row[0] if row else None
         conn.commit()
-        return True
+        return deal_db_id
     except Exception as e:
         print(f"[DB Error] Error saving deal: {e}")
-        return False
+        return None
+    finally:
+        conn.close()
+
+
+def delete_deal(product_id: str):
+    conn = get_connection()
+    ph = _ph(conn)
+    try:
+        cursor = conn.cursor()
+        cursor.execute(f"DELETE FROM seen_deals WHERE product_id = {ph}", (product_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_deal_for_redirect(deal_ref: str):
+    """Fetches deal info by integer row id or product_id for OpenGraph preview & redirect."""
+    conn = get_connection()
+    is_pg = _is_pg(conn)
+    ph = _ph(conn)
+    try:
+        cursor = conn.cursor()
+        if str(deal_ref).isdigit():
+            cursor.execute(
+                f"SELECT id, product_id, platform, title, price, original_price, discount_percent, url, image_url FROM seen_deals WHERE id = {ph}",
+                (int(deal_ref),)
+            )
+        else:
+            cursor.execute(
+                f"SELECT id, product_id, platform, title, price, original_price, discount_percent, url, image_url FROM seen_deals WHERE product_id = {ph}",
+                (str(deal_ref),)
+            )
+        rows = _fetchall_as_dicts(cursor, is_pg)
+        return rows[0] if rows else None
+    except Exception as e:
+        print(f"[DB Error] get_deal_for_redirect({deal_ref}): {e}")
+        return None
     finally:
         conn.close()
 
@@ -373,7 +444,8 @@ def get_stats():
 def cleanup_old_deals(days=None):
     if days is None:
         repeat_days = int(get_setting("repeat_days", "2"))
-        days = max(repeat_days * 2, 14)
+        # Retain deals for at least 90 days so shared WhatsApp redirect links remain valid
+        days = max(repeat_days * 2, 90)
 
     conn = get_connection()
     ph = _ph(conn)

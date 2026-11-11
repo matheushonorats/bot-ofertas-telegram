@@ -57,6 +57,13 @@ class Config:
     # AI (Gemini) for custom contextual product phrases
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 
+    # Public web server URL (used for WhatsApp rich image link previews + redirect)
+    # Render automatically populates RENDER_EXTERNAL_URL
+    PUBLIC_BASE_URL = (
+        os.getenv("PUBLIC_BASE_URL", "").strip()
+        or os.getenv("RENDER_EXTERNAL_URL", "").strip()
+    ).rstrip("/")
+
     # Database
     DB_PATH = BASE_DIR / "deals.db"
 
