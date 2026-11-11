@@ -1,4 +1,4 @@
-import requests
+from curl_cffi import requests
 from config import Config
 from affiliate import format_shopee_affiliate_link
 from database import is_deal_seen, get_setting
@@ -19,7 +19,7 @@ def fetch_shopee_deals(limit=50):
     seen_ids_in_batch = set()
     seen_titles_in_batch = set()
     try:
-        resp = requests.get(url, headers=headers, timeout=12)
+        resp = requests.get(url, headers=headers, impersonate="chrome120", timeout=12)
         if resp.status_code != 200:
             print(f"[Shopee] Status {resp.status_code} na API Flash Sale")
             return deals
@@ -74,6 +74,27 @@ def fetch_shopee_deals(limit=50):
             product_url = f"https://shopee.com.br/product/{shop_id}/{item_id}"
             affiliate_url = format_shopee_affiliate_link(product_url, shop_id=shop_id, item_id=item_id, shorten=False)
 
+            # Extract Shopee product/shop voucher when populated
+            coupon_text = ""
+            v = item.get("voucher")
+            if isinstance(v, dict):
+                v_code = str(v.get("voucher_code") or "").strip()
+                v_pct = v.get("discount_percentage") or 0
+                v_val = v.get("discount_value") or 0
+                if v_code:
+                    if v_pct:
+                        coupon_text = f"{v_code} ({int(v_pct)}% OFF)"
+                    elif v_val:
+                        val_str = f"{v_val / 100000.0:.2f}".replace(".", ",")
+                        coupon_text = f"{v_code} (R$ {val_str} OFF)"
+                    else:
+                        coupon_text = v_code
+                elif v_pct:
+                    coupon_text = f"{int(v_pct)}% OFF com Cupom na página"
+                elif v_val:
+                    val_str = f"{v_val / 100000.0:.2f}".replace(".", ",")
+                    coupon_text = f"R$ {val_str} OFF com Cupom na página"
+
             curr_price_str = f"{curr_price:.2f}".replace(".", ",")
             orig_price_str = f"{orig_price:.2f}".replace(".", ",") if orig_price > 0 else ""
 
@@ -86,6 +107,7 @@ def fetch_shopee_deals(limit=50):
                 "original_price": orig_price,
                 "original_price_str": orig_price_str,
                 "discount_percent": int(discount_percent),
+                "coupon": coupon_text,
                 "link": affiliate_url,
                 "image": image_url,
                 "category": "Flash Sale",

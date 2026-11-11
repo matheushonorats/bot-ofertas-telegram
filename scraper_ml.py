@@ -144,6 +144,13 @@ def fetch_mercadolivre_deals(limit_per_category=5):
                 seen_ids_in_batch.add(product_id)
                 seen_titles_in_batch.add(norm_title)
 
+                # Extract ML card coupon badge when available (e.g. "15% OFF com Cupom")
+                coupon_el = card.select_one(".poly-coupons__pill") or card.select_one(".poly-component__coupons")
+                coupon_text = ""
+                if coupon_el:
+                    raw_coupon = " ".join(coupon_el.stripped_strings)
+                    coupon_text = re.sub(r"\s*,\s*", ",", raw_coupon).strip()
+
                 affiliate_link = format_ml_affiliate_link(clean_link, shorten=False)
 
                 deals.append({
@@ -155,6 +162,7 @@ def fetch_mercadolivre_deals(limit_per_category=5):
                     "original_price": orig_price,
                     "original_price_str": orig_price_str,
                     "discount_percent": discount_percent,
+                    "coupon": coupon_text,
                     "link": affiliate_link,
                     "image": img_url,
                     "category": cat_clean,

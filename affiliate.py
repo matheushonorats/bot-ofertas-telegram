@@ -1,7 +1,9 @@
+import re
 import time
 import json
 import hmac
 import hashlib
+import urllib.parse
 import requests
 from config import Config
 
@@ -111,9 +113,21 @@ def format_shopee_affiliate_link(url: str, shop_id: str = "", item_id: str = "",
             final_url = f"{Config.SHOPEE_UNIVERSAL_LINK}{separator}url={clean_url}"
         return shorten_url(final_url) if shorten else final_url
 
-    # 3. Fallback: append tracking tag and shorten
+    # 3. Official Shopee universal redirect (generates valid uls_trackid & utm_term server-side)
     tag = Config.SHOPEE_AFFILIATE_TAG
     if tag:
+        aff_match = re.search(r"(?:an_|affiliate_id=)(\d+)", tag)
+        if aff_match:
+            affiliate_id = aff_match.group(1)
+            sub_match = re.search(r"sub_id=([^&]+)", tag)
+            sub_id = urllib.parse.quote(sub_match.group(1), safe="") if sub_match else "whatsapp"
+            encoded_origin = urllib.parse.quote(clean_url, safe="")
+            final_url = (
+                f"https://s.shopee.com.br/an_redir"
+                f"?origin_link={encoded_origin}&affiliate_id={affiliate_id}&sub_id={sub_id}"
+            )
+            return shorten_url(final_url) if shorten else final_url
+
         separator = "&" if "?" in clean_url else "?"
         final_url = f"{clean_url}{separator}{tag}"
     else:

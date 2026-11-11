@@ -1,4 +1,5 @@
 import sys
+import html
 import time
 import threading
 import argparse
@@ -20,7 +21,10 @@ from scraper_ml import fetch_mercadolivre_deals
 from scraper_shopee import fetch_shopee_deals
 from affiliate import shorten_url
 from telegram_client import TelegramClient
-from formatter import format_whatsapp_message
+from formatter import (
+    format_whatsapp_message, HEADER_STYLES,
+    DEFAULT_CTA_TEXT, DEFAULT_FOOTER_TEXT
+)
 from web_server import start_health_server
 
 # Prevents concurrent scans (e.g. timer + /ofertas button) from overlapping
@@ -55,6 +59,154 @@ def is_within_schedule() -> tuple:
 
     return True, "Dentro do horário"
 
+SAMPLE_PREVIEW_DEAL = {
+    "platform": "Shopee",
+    "title": "Fone Bluetooth Sem Fio TWS Pro",
+    "category": "Eletrônicos",
+    "original_price_str": "149,90",
+    "current_price_str": "69,90",
+    "discount_percent": 53,
+    "coupon": "15% OFF com Cupom",
+    "link": "https://s.shopee.com.br/exemplo",
+}
+
+_MSG_FIELD_PROMPTS = {
+    "topo": (
+        "✏️ <b>Para personalizar o Topo da mensagem</b>, responda ESTA mensagem com o novo texto.\n\n"
+        "📌 <b>Variáveis disponíveis:</b>\n"
+        "• <code>{desconto}</code> — percentual (ex: 53)\n"
+        "• <code>{produto}</code> — nome do produto\n"
+        "• <code>{preco}</code> — preço atual (ex: 69,90)\n"
+        "• <code>{preco_de}</code> — preço antigo\n"
+        "• <code>{loja}</code> — Shopee ou Mercado Livre\n\n"
+        "💡 Exemplo: <code>💥 {desconto}% OFF: {produto} por R$ {preco}</code>\n"
+        "↩️ Envie <code>padrao</code> para voltar ao padrão ou <code>cancelar</code> para cancelar."
+    ),
+    "cta": (
+        "📣 <b>Para personalizar a Chamada do link (CTA)</b>, responda ESTA mensagem com o novo texto.\n\n"
+        "💡 Exemplo: <code>👇 Aproveite antes que acabe:</code>\n"
+        "↩️ Envie <code>padrao</code> para restaurar o padrão ou <code>cancelar</code> para cancelar."
+    ),
+    "footer": (
+        "📝 <b>Para personalizar o Rodapé</b>, responda ESTA mensagem com o novo texto.\n\n"
+        "💡 Exemplo: <code>⚡ Estoque limitado! Corre garantir!</code>\n"
+        "↩️ Envie <code>padrao</code> para restaurar o padrão ou <code>cancelar</code> para cancelar."
+    ),
+    "cupom_shopee": (
+        "🎟️ <b>Para definir um Cupom fixo da Shopee</b> (opcional), responda ESTA mensagem com o código/descrição.\n\n"
+        "💡 Exemplo: <code>SHOPEE10 (10% OFF acima de R$ 50)</code>\n"
+        "⚠️ <i>Use apenas cupons oficiais da Shopee ou seu cupom próprio da Central de Afiliados — cupons exclusivos de terceiros podem tirar sua comissão!</i>\n"
+        "↩️ Envie <code>limpar</code> para remover ou <code>cancelar</code> para cancelar."
+    ),
+    "cupom_ml": (
+        "🎟️ <b>Para definir um Cupom fixo do Mercado Livre</b> (opcional), responda ESTA mensagem com o código/descrição.\n\n"
+        "💡 Exemplo: <code>MELI10 (10% OFF na loja)</code>\n"
+        "⚠️ <i>Use apenas cupons oficiais do Mercado Livre ou seu cupom próprio da Central de Afiliados — cupons exclusivos de outro divulgador podem tirar sua comissão!</i>\n"
+        "↩️ Envie <code>limpar</code> para remover ou <code>cancelar</code> para cancelar."
+    ),
+}
+
+
+def _apply_msg_field_update(field: str, raw_value: str) -> str:
+    """Applies a message template field update and returns confirmation HTML."""
+    val = raw_value.strip()
+    is_reset = val.lower() in ("padrao", "padrão", "default", "reset", "limpar", "nenhum", "remover", "off", "-")
+
+    if field == "topo":
+        if is_reset or not val:
+            set_setting("msg_custom_header", "")
+            set_setting("msg_header_style", "direct")
+            return "✅ Topo restaurado para o padrão (🔥 Desconto + Produto)."
+        set_setting("msg_custom_header", val)
+        set_setting("msg_header_style", "custom")
+        return f"✅ Topo personalizado salvo:\n<code>{html.escape(val)}</code>"
+
+    if field == "cta":
+        new_cta = DEFAULT_CTA_TEXT if (is_reset or not val) else val
+        set_setting("msg_cta_text", new_cta)
+        return f"✅ Chamada do link atualizada:\n<code>{html.escape(new_cta)}</code>"
+
+    if field == "footer":
+        new_footer = DEFAULT_FOOTER_TEXT if (is_reset or not val) else val
+        set_setting("msg_footer_text", new_footer)
+        set_setting("msg_show_footer", "true")
+        return f"✅ Rodapé atualizado:\n<code>{html.escape(new_footer)}</code>"
+
+    if field in ("cupom_shopee", "cupom_ml"):
+        key = "coupon_shopee" if field == "cupom_shopee" else "coupon_ml"
+        store = "Shopee" if field == "cupom_shopee" else "Mercado Livre"
+        if is_reset or not val:
+            set_setting(key, "")
+            return f"✅ Cupom fixo da {store} removido (cupons automáticos por produto continuam ativos se ligados)."
+        set_setting(key, val)
+        set_setting("msg_show_coupon", "true")
+        return f"✅ Cupom fixo da {store} ativado:\n<code>{html.escape(val)}</code>"
+
+    return "⚠️ Campo de mensagem desconhecido."
+
+
+def build_msg_panel_data():
+    """Builds text and inline keyboard for WhatsApp message customization."""
+    header_style = get_setting("msg_header_style", "direct")
+    style_label = HEADER_STYLES.get(header_style, HEADER_STYLES["direct"])
+    show_platform = get_setting("msg_show_platform", "true") == "true"
+    show_footer = get_setting("msg_show_footer", "true") == "true"
+    show_coupon = get_setting("msg_show_coupon", "true") == "true"
+    custom_header = get_setting("msg_custom_header", "").strip()
+    cta_text = get_setting("msg_cta_text", DEFAULT_CTA_TEXT).strip() or DEFAULT_CTA_TEXT
+    cupom_shopee = get_setting("coupon_shopee", "").strip()
+    cupom_ml = get_setting("coupon_ml", "").strip()
+
+    preview = format_whatsapp_message(SAMPLE_PREVIEW_DEAL)
+    plat_icon = "✅" if show_platform else "❌"
+    foot_icon = "✅" if show_footer else "❌"
+    coupon_icon = "✅" if show_coupon else "❌"
+    topo_info = custom_header if (header_style == "custom" and custom_header) else style_label
+
+    coupon_parts = []
+    if cupom_shopee:
+        coupon_parts.append(f"Shopee={cupom_shopee}")
+    if cupom_ml:
+        coupon_parts.append(f"ML={cupom_ml}")
+    coupon_summary = ("Auto + " + ", ".join(coupon_parts)) if coupon_parts else ("Automático (se houver)" if show_coupon else "Oculto")
+
+    text = (
+        "✏️ <b>Personalizar Mensagens do WhatsApp</b>\n\n"
+        "<i>A 1ª linha prioriza o produto para cada notificação no celular ficar única:</i>\n\n"
+        f"🎨 <b>Topo:</b> <code>{html.escape(topo_info)}</code>\n"
+        f"📣 <b>Chamada (CTA):</b> <code>{html.escape(cta_text)}</code>\n"
+        f"🏪 <b>Mostrar Loja:</b> <code>{'Sim' if show_platform else 'Não'}</code>  |  "
+        f"📝 <b>Rodapé:</b> <code>{'Ativado' if show_footer else 'Desativado'}</code>\n"
+        f"🎟️ <b>Cupons:</b> <code>{html.escape(coupon_summary)}</code>\n\n"
+        "👀 <b>Pré-via de como vai chegar:</b>\n"
+        f"<pre>{html.escape(preview)}</pre>\n"
+        "💡 <i>Atalhos:</i> <code>/topo</code>, <code>/cta</code>, <code>/rodape</code>, <code>/cupomshopee</code>, <code>/cupomml</code>."
+    )
+
+    keyboard = {
+        "inline_keyboard": [
+            [{"text": f"🎨 Estilo do Topo: {style_label}", "callback_data": "cycle_msg_header"}],
+            [
+                {"text": f"🏪 Loja: {plat_icon}", "callback_data": "toggle_msg_platform"},
+                {"text": f"📝 Rodapé: {foot_icon}", "callback_data": "toggle_msg_footer"},
+                {"text": f"🎟️ Cupons: {coupon_icon}", "callback_data": "toggle_msg_coupon"},
+            ],
+            [{"text": "✍️ Escrever Topo Personalizado", "callback_data": "prompt_msg_topo"}],
+            [
+                {"text": "📣 Editar Chamada", "callback_data": "prompt_msg_cta"},
+                {"text": "📝 Editar Rodapé", "callback_data": "prompt_msg_footer"},
+            ],
+            [
+                {"text": "🎟️ Cupom Shopee", "callback_data": "prompt_msg_cupom_shopee"},
+                {"text": "🎟️ Cupom ML", "callback_data": "prompt_msg_cupom_ml"},
+            ],
+            [{"text": "🔄 Restaurar Padrão", "callback_data": "reset_msg_template"}],
+            [{"text": "⬅️ Voltar ao Painel", "callback_data": "back_to_main_panel"}],
+        ]
+    }
+    return text, keyboard
+
+
 def build_panel_data():
     """Builds text and inline keyboard for the interactive settings panel."""
     comments_active = get_setting("comments_enabled", "true") == "true"
@@ -65,6 +217,8 @@ def build_panel_data():
     end_hour = int(get_setting("end_hour", "22"))
     active_days = get_setting("active_days", "todos")
     repeat_days = get_setting("repeat_days", "2")
+    header_style = get_setting("msg_header_style", "direct")
+    style_label = HEADER_STYLES.get(header_style, HEADER_STYLES["direct"])
 
     if start_hour == 0 and end_hour == 24:
         hours_str = "24h (Sem pausa)"
@@ -94,6 +248,7 @@ def build_panel_data():
         "⚙️ <b>Painel de Opções do Bot de Ofertas</b>\n\n"
         "<i>Toque nos botões abaixo para personalizar o comportamento do bot:</i>\n\n"
         f"💬 <b>Frases nos Produtos:</b> <code>{status_str}</code>\n"
+        f"✏️ <b>Estilo da Mensagem:</b> <code>{html.escape(style_label)}</code>\n"
         f"⏰ <b>Horário de Funcionamento:</b> <code>{hours_str}</code>\n"
         f"📅 <b>Dias de Envio:</b> <code>{days_str}</code>\n"
         f"🔄 <b>Repetir Produtos:</b> <code>{repeat_str}</code>\n"
@@ -116,6 +271,7 @@ def build_panel_data():
                 {"text": f"🏷️ Mínimo: {min_disc}%", "callback_data": "cycle_discount"}
             ],
             [{"text": f"📨 Por vez: {deals_label}", "callback_data": "cycle_max_deals"}],
+            [{"text": "✏️ Personalizar Mensagens", "callback_data": "open_msg_panel"}],
             [{"text": "🔎 Buscar Novas Ofertas Agora", "callback_data": "trigger_deals"}]
         ]
     }
@@ -483,6 +639,65 @@ def handle_telegram_updates(telegram: TelegramClient):
                         text, kb = build_panel_data()
                         telegram.edit_message_text(chat_id, msg_id, text, reply_markup=kb)
 
+                    elif data == "open_msg_panel":
+                        telegram.answer_callback_query(cb_id)
+                        text, kb = build_msg_panel_data()
+                        telegram.edit_message_text(chat_id, msg_id, text, reply_markup=kb)
+
+                    elif data == "back_to_main_panel":
+                        telegram.answer_callback_query(cb_id)
+                        text, kb = build_panel_data()
+                        telegram.edit_message_text(chat_id, msg_id, text, reply_markup=kb)
+
+                    elif data == "cycle_msg_header":
+                        custom_hdr = get_setting("msg_custom_header", "").strip()
+                        styles = ["direct", "price_first", "alert", "custom"] if custom_hdr else ["direct", "price_first", "alert"]
+                        curr = get_setting("msg_header_style", "direct")
+                        next_idx = (styles.index(curr) + 1) % len(styles) if curr in styles else 0
+                        new_style = styles[next_idx]
+                        set_setting("msg_header_style", new_style)
+                        telegram.answer_callback_query(cb_id, text=f"🎨 Topo: {HEADER_STYLES[new_style]}")
+                        text, kb = build_msg_panel_data()
+                        telegram.edit_message_text(chat_id, msg_id, text, reply_markup=kb)
+
+                    elif data in ("toggle_msg_platform", "toggle_msg_footer", "toggle_msg_coupon"):
+                        toggle_cfg = {
+                            "toggle_msg_platform": ("msg_show_platform", "Nome da loja"),
+                            "toggle_msg_footer": ("msg_show_footer", "Rodapé"),
+                            "toggle_msg_coupon": ("msg_show_coupon", "Cupons na mensagem"),
+                        }
+                        key, label = toggle_cfg[data]
+                        curr = get_setting(key, "true") == "true"
+                        new_val = "false" if curr else "true"
+                        set_setting(key, new_val)
+                        state = "ativado" if new_val == "true" else "oculto"
+                        telegram.answer_callback_query(cb_id, text=f"{label} {state}!")
+                        text, kb = build_msg_panel_data()
+                        telegram.edit_message_text(chat_id, msg_id, text, reply_markup=kb)
+
+                    elif data in ("prompt_msg_topo", "prompt_msg_cta", "prompt_msg_footer", "prompt_msg_cupom_shopee", "prompt_msg_cupom_ml"):
+                        field = data.replace("prompt_msg_", "", 1)
+                        cb_user_id = str(cb.get("from", {}).get("id", ""))
+                        set_setting(f"pending_msg_edit_{chat_id}_{cb_user_id}", f"{field}:{int(time.time())}")
+                        telegram.answer_callback_query(cb_id, text="✏️ Responda à mensagem que vou enviar!")
+                        telegram.send_message(
+                            chat_id,
+                            _MSG_FIELD_PROMPTS[field],
+                            reply_markup={"force_reply": True}
+                        )
+
+                    elif data == "reset_msg_template":
+                        set_setting("msg_header_style", "direct")
+                        set_setting("msg_custom_header", "")
+                        set_setting("msg_cta_text", DEFAULT_CTA_TEXT)
+                        set_setting("msg_footer_text", DEFAULT_FOOTER_TEXT)
+                        set_setting("msg_show_platform", "true")
+                        set_setting("msg_show_footer", "true")
+                        set_setting("msg_show_coupon", "true")
+                        telegram.answer_callback_query(cb_id, text="🔄 Layout restaurado para o padrão!")
+                        text, kb = build_msg_panel_data()
+                        telegram.edit_message_text(chat_id, msg_id, text, reply_markup=kb)
+
                     elif data == "start_bot_official":
                         set_setting("bot_activated", "true")
                         telegram.answer_callback_query(cb_id, text="🚀 Trabalhos iniciados oficialmente com sucesso!", show_alert=True)
@@ -514,6 +729,38 @@ def handle_telegram_updates(telegram: TelegramClient):
                     continue
 
                 print(f"[Comando Recebido] {username} ({chat_id}): {text}")
+
+                from_user_id = str(message.get("from", {}).get("id", ""))
+                chat_type = chat.get("type", "")
+                reply_to = message.get("reply_to_message", {})
+                pending_key = f"pending_msg_edit_{chat_id}_{from_user_id}"
+
+                if text.startswith("/"):
+                    if get_setting(pending_key, ""):
+                        set_setting(pending_key, "")
+                else:
+                    pending_val = get_setting(pending_key, "")
+                    if pending_val:
+                        field, _, ts_str = pending_val.partition(":")
+                        is_fresh = ts_str.isdigit() and (time.time() - int(ts_str)) <= 600
+                        reply_text = reply_to.get("text", "") if isinstance(reply_to, dict) else ""
+                        is_prompt_reply = (
+                            isinstance(reply_to, dict)
+                            and bool(reply_to.get("from", {}).get("is_bot"))
+                            and ("responda ESTA mensagem" in reply_text)
+                        )
+                        if not is_fresh:
+                            set_setting(pending_key, "")
+                        elif is_prompt_reply or chat_type == "private":
+                            set_setting(pending_key, "")
+                            if text.lower() == "cancelar":
+                                telegram.send_message(chat_id, "❌ Edição cancelada.")
+                            else:
+                                confirm = _apply_msg_field_update(field, text)
+                                telegram.send_message(chat_id, confirm)
+                                msg_text, msg_kb = build_msg_panel_data()
+                                telegram.send_message(chat_id, msg_text, reply_markup=msg_kb)
+                            continue
 
                 if text.startswith("/start"):
                     welcome = (
@@ -598,9 +845,33 @@ def handle_telegram_updates(telegram: TelegramClient):
                         "Se você quiser mandar com a foto grande no WhatsApp:\n"
                         "1. Toque na foto aqui no Telegram e compartilhe no seu grupo de WhatsApp.\n"
                         "2. Depois toque no texto da oferta (ele copia sozinho) e cole na legenda da foto!\n\n"
-                        "⚙️ Digite <b>/painel</b> para abrir as configurações e ligar/desligar funções."
+                        "⚙️ Digite <b>/painel</b> para abrir as configurações e personalizar mensagens e filtros."
                     )
                     telegram.send_message(chat_id, help_msg)
+
+                elif text.split(None, 1)[0].split("@")[0].lower() in ("/topo", "/cta", "/rodape", "/cupomshopee", "/cupomml"):
+                    parts = text.split(None, 1)
+                    cmd_name = parts[0].split("@")[0].lower()
+                    cmd_arg = parts[1].strip() if len(parts) > 1 else ""
+                    field = {
+                        "/topo": "topo",
+                        "/cta": "cta",
+                        "/rodape": "footer",
+                        "/cupomshopee": "cupom_shopee",
+                        "/cupomml": "cupom_ml",
+                    }[cmd_name]
+                    if cmd_arg:
+                        confirm = _apply_msg_field_update(field, cmd_arg)
+                        telegram.send_message(chat_id, confirm)
+                        msg_text, msg_kb = build_msg_panel_data()
+                        telegram.send_message(chat_id, msg_text, reply_markup=msg_kb)
+                    else:
+                        set_setting(pending_key, f"{field}:{int(time.time())}")
+                        telegram.send_message(
+                            chat_id,
+                            _MSG_FIELD_PROMPTS[field],
+                            reply_markup={"force_reply": True}
+                        )
 
         except Exception as e:
             print(f"[Erro no Polling] {e}")
