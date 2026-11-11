@@ -494,31 +494,15 @@ def run_deal_scanner(telegram: TelegramClient, chat_id: str = None, max_deals: i
                 print(f"  ⏭️ Pulando duplicata: {title[:40]}")
                 continue
 
-            if Config.PUBLIC_BASE_URL:
-                db_id = save_deal(deal)
-                ref = db_id if db_id else pid
-                send_payload = dict(deal)
-                send_payload["link"] = f"{Config.PUBLIC_BASE_URL}/o/{ref}"
-                print(f"  📤 Enviando [{deal['platform']}]: {title[:40]}... ({deal['discount_percent']}% OFF)")
-                msg_id = telegram.send_deal(target_chat, send_payload)
-                if msg_id:
-                    save_deal(deal, message_id=msg_id)
-                    sent_ids.add(pid)
-                    sent_titles.add(norm_title)
-                    sent_count += 1
-                    time.sleep(2)
-                else:
-                    delete_deal(pid)
-            else:
-                deal["link"] = shorten_url(deal.get("link", ""))
-                print(f"  📤 Enviando [{deal['platform']}]: {title[:40]}... ({deal['discount_percent']}% OFF)")
-                msg_id = telegram.send_deal(target_chat, deal)
-                if msg_id:
-                    save_deal(deal, message_id=msg_id)
-                    sent_ids.add(pid)
-                    sent_titles.add(norm_title)
-                    sent_count += 1
-                    time.sleep(2)  # brief pause to avoid Telegram rate limits
+            deal["link"] = shorten_url(deal.get("link", ""))
+            print(f"  📤 Enviando [{deal['platform']}]: {title[:40]}... ({deal['discount_percent']}% OFF)")
+            msg_id = telegram.send_deal(target_chat, deal)
+            if msg_id:
+                save_deal(deal, message_id=msg_id)
+                sent_ids.add(pid)
+                sent_titles.add(norm_title)
+                sent_count += 1
+                time.sleep(2)  # brief pause to avoid Telegram rate limits
 
         print(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ Varredura finalizada. {sent_count} novas ofertas enviadas.")
         return sent_count

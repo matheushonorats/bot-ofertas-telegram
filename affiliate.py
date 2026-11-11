@@ -9,21 +9,31 @@ from config import Config
 
 def shorten_url(url: str) -> str:
     """
-    Shortens a long affiliate URL using da.gd (no Cloudflare interstitial, preserves query params).
-    Never uses Viglink or is.gd Cloudflare pages that break WhatsApp previews.
-    Fallback: returns the clean original URL directly.
+    Shortens a long affiliate URL cleanly while preserving query parameters.
+    Tries da.gd first (no Cloudflare interstitial, never Viglink), then is.gd fallback,
+    or returns the original URL directly.
     """
     if not url:
         return ""
-    if any(domain in url for domain in ("da.gd/", "is.gd/", "shp.ee/", "s.shopee", "meli.la/", "onrender.com/o/")):
+    if any(domain in url for domain in ("da.gd/", "is.gd/", "shp.ee/", "meli.la/")):
+        return url
+    if "s.shopee" in url and "/an_redir" not in url:
         return url
     try:
-        resp = requests.get("https://da.gd/s", params={"url": url}, timeout=5)
+        resp = requests.get("https://da.gd/s", params={"url": url}, timeout=6)
         short = resp.text.strip()
         if resp.status_code == 200 and short.startswith("https://da.gd/"):
             return short
     except Exception as e:
-        print(f"[Shortener] da.gd indisponível ({e}), mantendo link direto.")
+        print(f"[Shortener] da.gd indisponível ({e}), tentando fallback is.gd...")
+
+    try:
+        resp = requests.get("https://is.gd/create.php", params={"format": "simple", "url": url}, timeout=6)
+        short = resp.text.strip()
+        if resp.status_code == 200 and short.startswith("https://is.gd/"):
+            return short
+    except Exception as e:
+        print(f"[Shortener] is.gd indisponível ({e}), mantendo link direto.")
 
     return url
 
