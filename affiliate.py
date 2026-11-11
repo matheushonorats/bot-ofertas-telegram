@@ -13,6 +13,8 @@ def shorten_url(url: str) -> str:
     """
     if not url:
         return ""
+    if any(domain in url for domain in ("is.gd/", "shp.ee/", "s.shopee", "meli.la/")):
+        return url
     try:
         resp = requests.get("https://is.gd/create.php", params={"format": "simple", "url": url}, timeout=5)
         if resp.status_code == 200 and resp.text.startswith("https://is.gd/"):
@@ -74,9 +76,9 @@ def generate_shopee_short_link(original_url: str) -> str:
 
     return ""
 
-def format_ml_affiliate_link(url: str) -> str:
+def format_ml_affiliate_link(url: str, shorten: bool = True) -> str:
     """Formats Mercado Livre product URL with affiliate tag or custom template."""
-    clean_url = url.split("?")[0]
+    clean_url = url.split("?")[0].split("#")[0]
     tag = Config.ML_AFFILIATE_TAG
     template = Config.ML_AFFILIATE_URL_TEMPLATE
 
@@ -88,9 +90,9 @@ def format_ml_affiliate_link(url: str) -> str:
     else:
         final_url = clean_url
 
-    return shorten_url(final_url)
+    return shorten_url(final_url) if shorten else final_url
 
-def format_shopee_affiliate_link(url: str, shop_id: str = "", item_id: str = "") -> str:
+def format_shopee_affiliate_link(url: str, shop_id: str = "", item_id: str = "", shorten: bool = True) -> str:
     """Formats Shopee product URL with affiliate shortlink, universal link or tracking tag."""
     # 1. Try official Shopee Affiliate API if credentials are provided
     if Config.SHOPEE_APP_ID and Config.SHOPEE_APP_SECRET:
@@ -99,14 +101,14 @@ def format_shopee_affiliate_link(url: str, shop_id: str = "", item_id: str = "")
             return api_link
 
     # 2. Try universal link template
-    clean_url = url.split("?")[0]
+    clean_url = url.split("?")[0].split("#")[0]
     if Config.SHOPEE_UNIVERSAL_LINK:
         if "{shop_id}" in Config.SHOPEE_UNIVERSAL_LINK and "{item_id}" in Config.SHOPEE_UNIVERSAL_LINK:
             final_url = Config.SHOPEE_UNIVERSAL_LINK.format(shop_id=shop_id, item_id=item_id)
         else:
             separator = "&" if "?" in Config.SHOPEE_UNIVERSAL_LINK else "?"
             final_url = f"{Config.SHOPEE_UNIVERSAL_LINK}{separator}url={clean_url}"
-        return shorten_url(final_url)
+        return shorten_url(final_url) if shorten else final_url
 
     # 3. Fallback: append tracking tag and shorten
     tag = Config.SHOPEE_AFFILIATE_TAG
@@ -116,5 +118,4 @@ def format_shopee_affiliate_link(url: str, shop_id: str = "", item_id: str = "")
     else:
         final_url = clean_url
 
-    # Automatically shorten the link to make it clean & appealing
-    return shorten_url(final_url)
+    return shorten_url(final_url) if shorten else final_url

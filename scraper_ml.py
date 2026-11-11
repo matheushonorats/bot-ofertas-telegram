@@ -4,7 +4,20 @@ from curl_cffi import requests
 from bs4 import BeautifulSoup
 from config import Config
 from affiliate import format_ml_affiliate_link
-from database import is_deal_seen
+from database import is_deal_seen, get_setting
+
+# Real ML category pages (avoid /ofertas/<slug> which redirects to homepage)
+CATEGORY_URL_MAP = {
+    "tecnologia": "https://www.mercadolivre.com.br/c/celulares-e-telefones",
+    "celulares-e-telefones": "https://www.mercadolivre.com.br/c/celulares-e-telefones",
+    "eletrodomesticos": "https://www.mercadolivre.com.br/c/eletrodomesticos",
+    "casa-e-decoracao": "https://www.mercadolivre.com.br/c/casa-moveis-e-decoracao",
+    "casa-moveis-e-decoracao": "https://www.mercadolivre.com.br/c/casa-moveis-e-decoracao",
+    "beleza-e-cuidado-pessoal": "https://www.mercadolivre.com.br/c/beleza-e-cuidado-pessoal",
+    "ferramentas": "https://www.mercadolivre.com.br/c/ferramentas",
+    "supermercado": "https://www.mercadolivre.com.br/ofertas/supermercado",
+    "mais-vendidos": "https://www.mercadolivre.com.br/mais-vendidos",
+}
 
 def clean_price(price_str: str) -> float:
     if not price_str:
@@ -20,17 +33,17 @@ def clean_price(price_str: str) -> float:
 
 def fetch_mercadolivre_deals(limit_per_category=5):
     """
-    Scrapes hot deals from Mercado Livre categories.
+    Scrapes hot deals from Mercado Livre categories without intra-batch duplicates.
     """
     categories = Config.ML_CATEGORIES
+    min_discount = int(get_setting("min_discount", str(Config.MIN_DISCOUNT_PERCENT)))
     deals = []
+    seen_ids_in_batch = set()
+    seen_titles_in_batch = set()
 
     for cat in categories:
-        cat_clean = cat.strip()
-        if cat_clean == "mais-vendidos":
-            url = "https://www.mercadolivre.com.br/mais-vendidos"
-        else:
-            url = f"https://www.mercadolivre.com.br/ofertas/{cat_clean}"
+        cat_clean = cat.strip().lower()
+        url = CATEGORY_URL_MAP.get(cat_clean, f"https://www.mercadolivre.com.br/c/{cat_clean}")
 
         try:
             resp = requests.get(url, impersonate="chrome120", timeout=15)
@@ -50,6 +63,10 @@ def fetch_mercadolivre_deals(limit_per_category=5):
                 if not title_el:
                     continue
                 title = title_el.text.strip()
+                norm_title = title.lower()
+
+                if norm_title in seen_titles_in_batch:
+                    continue
 
                 link = title_el.get("href")
                 if not link:
@@ -59,11 +76,15 @@ def fetch_mercadolivre_deals(limit_per_category=5):
                 if not link or "mercadolivre.com" not in link:
                     continue
 
-                clean_link = link.split("?")[0]
+                # Strip query string AND #fragment so affiliate params stay in query string
+                clean_link = link.split("?")[0].split("#")[0]
 
-                # Extract product MLB ID for unique tracking
-                mlb_match = re.search(r"(MLB-?\d+)", clean_link)
+                # Extract product MLB ID (prefer clean URL, fallback to raw link wid=...)
+                mlb_match = re.search(r"(MLB-?\d+)", clean_link) or re.search(r"(MLB-?\d+)", link)
                 product_id = f"ml_{mlb_match.group(1).replace('-', '')}" if mlb_match else f"ml_{clean_link}"
+
+                if product_id in seen_ids_in_batch:
+                    continue
 
                 if is_deal_seen(product_id, title=title):
                     continue
@@ -114,11 +135,14 @@ def fetch_mercadolivre_deals(limit_per_category=5):
                                 orig_price = round(curr_price / (1 - (discount_percent / 100)), 2)
                                 orig_price_str = f"{orig_price:.2f}".replace(".", ",")
 
-                # Filter by minimum discount
-                if discount_percent < Config.MIN_DISCOUNT_PERCENT:
+                # Filter by dynamic minimum discount
+                if discount_percent < min_discount:
                     continue
 
-                affiliate_link = format_ml_affiliate_link(clean_link)
+                seen_ids_in_batch.add(product_id)
+                seen_titles_in_batch.add(norm_title)
+
+                affiliate_link = format_ml_affiliate_link(clean_link, shorten=False)
 
                 deals.append({
                     "id": product_id,

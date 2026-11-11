@@ -27,35 +27,95 @@ else:
 
 
 # ---------------------------------------------------------------------------
-# Connection helpers
+# Connection & backend helpers
 # ---------------------------------------------------------------------------
+
+def _is_pg(conn) -> bool:
+    return not isinstance(conn, sqlite3.Connection)
+
+
+def _ph(conn) -> str:
+    return "%s" if _is_pg(conn) else "?"
+
+
+def _db_ts(conn, dt: datetime):
+    """Formats a UTC datetime to match CURRENT_TIMESTAMP in each backend."""
+    utc_dt = dt.astimezone(timezone.utc)
+    if _is_pg(conn):
+        return utc_dt.replace(tzinfo=None)
+    return utc_dt.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _init_sqlite_schema(conn):
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS seen_deals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            product_id TEXT UNIQUE NOT NULL,
+            platform TEXT NOT NULL,
+            title TEXT NOT NULL,
+            price REAL NOT NULL,
+            original_price REAL,
+            discount_percent INTEGER,
+            url TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_seen_deals_pid ON seen_deals(product_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_seen_deals_title ON seen_deals(title)")
+
+    cursor.execute("PRAGMA table_info(seen_deals)")
+    columns = [col[1] for col in cursor.fetchall()]
+    if "telegram_message_id" not in columns:
+        cursor.execute("ALTER TABLE seen_deals ADD COLUMN telegram_message_id INTEGER")
+    if "end_time" not in columns:
+        cursor.execute("ALTER TABLE seen_deals ADD COLUMN end_time INTEGER")
+    if "is_active" not in columns:
+        cursor.execute("ALTER TABLE seen_deals ADD COLUMN is_active INTEGER DEFAULT 1")
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS bot_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+    """)
+    conn.commit()
+
+
+def _connect_postgres():
+    try:
+        return psycopg2.connect(DATABASE_URL)
+    except Exception as first_err:
+        if "sslmode" not in DATABASE_URL:
+            try:
+                return psycopg2.connect(DATABASE_URL, sslmode="require")
+            except Exception:
+                pass
+        raise first_err
+
 
 def get_connection():
     global USE_POSTGRES
     if USE_POSTGRES:
         try:
-            return psycopg2.connect(DATABASE_URL)
+            return _connect_postgres()
         except Exception as e:
             print(f"[DB] ⚠️ Falha ao conectar no PostgreSQL: {e}. Usando SQLite temporariamente.")
+            USE_POSTGRES = False
             conn = sqlite3.connect(Config.DB_PATH)
             conn.row_factory = sqlite3.Row
+            _init_sqlite_schema(conn)
             return conn
-    else:
-        conn = sqlite3.connect(Config.DB_PATH)
-        conn.row_factory = sqlite3.Row
-        return conn
+    conn = sqlite3.connect(Config.DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
 
 
-def _placeholder():
-    return "%s" if USE_POSTGRES else "?"
-
-
-def _fetchall_as_dicts(cursor):
-    if USE_POSTGRES:
+def _fetchall_as_dicts(cursor, is_pg: bool):
+    if is_pg:
         cols = [desc[0] for desc in cursor.description]
         return [dict(zip(cols, row)) for row in cursor.fetchall()]
-    else:
-        return [dict(row) for row in cursor.fetchall()]
+    return [dict(row) for row in cursor.fetchall()]
 
 
 # ---------------------------------------------------------------------------
@@ -64,10 +124,11 @@ def _fetchall_as_dicts(cursor):
 
 def init_db():
     conn = get_connection()
+    is_pg = _is_pg(conn)
     try:
         cursor = conn.cursor()
 
-        if USE_POSTGRES:
+        if is_pg:
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS seen_deals (
                     id SERIAL PRIMARY KEY,
@@ -93,42 +154,13 @@ def init_db():
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_seen_deals_pid ON seen_deals(product_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_seen_deals_title ON seen_deals(title)")
         else:
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS seen_deals (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    product_id TEXT UNIQUE NOT NULL,
-                    platform TEXT NOT NULL,
-                    title TEXT NOT NULL,
-                    price REAL NOT NULL,
-                    original_price REAL,
-                    discount_percent INTEGER,
-                    url TEXT NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_seen_deals_pid ON seen_deals(product_id)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_seen_deals_title ON seen_deals(title)")
-
-            cursor.execute("PRAGMA table_info(seen_deals)")
-            columns = [col[1] for col in cursor.fetchall()]
-            if "telegram_message_id" not in columns:
-                cursor.execute("ALTER TABLE seen_deals ADD COLUMN telegram_message_id INTEGER")
-            if "end_time" not in columns:
-                cursor.execute("ALTER TABLE seen_deals ADD COLUMN end_time INTEGER")
-            if "is_active" not in columns:
-                cursor.execute("ALTER TABLE seen_deals ADD COLUMN is_active INTEGER DEFAULT 1")
-
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS bot_settings (
-                    key TEXT PRIMARY KEY,
-                    value TEXT NOT NULL
-                )
-            """)
+            _init_sqlite_schema(conn)
 
         defaults = [
             ("comments_enabled", "true"),
             ("check_interval", "10"),
-            ("min_discount", "15"),
+            ("min_discount", str(Config.MIN_DISCOUNT_PERCENT)),
+            ("max_deals_per_run", str(Config.MAX_DEALS_PER_RUN)),
             ("start_hour", "8"),
             ("end_hour", "22"),
             ("active_days", "todos"),
@@ -136,7 +168,7 @@ def init_db():
             ("bot_activated", "true"),
         ]
         for key, value in defaults:
-            if USE_POSTGRES:
+            if is_pg:
                 cursor.execute(
                     "INSERT INTO bot_settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO NOTHING",
                     (key, value)
@@ -157,8 +189,8 @@ def init_db():
 # ---------------------------------------------------------------------------
 
 def get_setting(key: str, default: str = "") -> str:
-    ph = _placeholder()
     conn = get_connection()
+    ph = _ph(conn)
     try:
         cursor = conn.cursor()
         cursor.execute(f"SELECT value FROM bot_settings WHERE key = {ph}", (key,))
@@ -169,11 +201,11 @@ def get_setting(key: str, default: str = "") -> str:
 
 
 def set_setting(key: str, value: str):
-    ph = _placeholder()
     conn = get_connection()
+    is_pg = _is_pg(conn)
     try:
         cursor = conn.cursor()
-        if USE_POSTGRES:
+        if is_pg:
             cursor.execute(
                 "INSERT INTO bot_settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
                 (key, str(value))
@@ -199,9 +231,9 @@ def is_deal_seen(product_id: str, title: str = "") -> bool:
     2. Checks if an identical title was already sent within repeat_days.
     """
     repeat_days = int(get_setting("repeat_days", "2"))
-    cutoff = datetime.now(timezone.utc) - timedelta(days=repeat_days)
-    ph = _placeholder()
     conn = get_connection()
+    ph = _ph(conn)
+    cutoff = _db_ts(conn, datetime.now(timezone.utc) - timedelta(days=repeat_days))
     try:
         cursor = conn.cursor()
         cursor.execute(
@@ -231,18 +263,20 @@ def is_deal_seen(product_id: str, title: str = "") -> bool:
 
 def save_deal(deal: dict, message_id: int = None):
     conn = get_connection()
+    is_pg = _is_pg(conn)
     try:
         cursor = conn.cursor()
-        if USE_POSTGRES:
+        if is_pg:
             cursor.execute("""
                 INSERT INTO seen_deals (
                     product_id, platform, title, price, original_price, discount_percent, url,
-                    telegram_message_id, end_time, is_active
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 1)
+                    telegram_message_id, end_time, is_active, created_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 1, CURRENT_TIMESTAMP)
                 ON CONFLICT (product_id) DO UPDATE
                     SET telegram_message_id = EXCLUDED.telegram_message_id,
                         end_time = EXCLUDED.end_time,
-                        is_active = 1
+                        is_active = 1,
+                        created_at = CURRENT_TIMESTAMP
             """, (
                 deal.get("id"),
                 deal.get("platform"),
@@ -274,7 +308,7 @@ def save_deal(deal: dict, message_id: int = None):
             if message_id:
                 cursor.execute("""
                     UPDATE seen_deals
-                    SET telegram_message_id = ?, end_time = ?, is_active = 1
+                    SET telegram_message_id = ?, end_time = ?, is_active = 1, created_at = CURRENT_TIMESTAMP
                     WHERE product_id = ?
                 """, (message_id, int(deal.get("end_time", 0)), deal.get("id")))
         conn.commit()
@@ -288,6 +322,7 @@ def save_deal(deal: dict, message_id: int = None):
 
 def get_active_posted_deals():
     conn = get_connection()
+    is_pg = _is_pg(conn)
     try:
         cursor = conn.cursor()
         cursor.execute("""
@@ -295,14 +330,14 @@ def get_active_posted_deals():
             FROM seen_deals
             WHERE telegram_message_id IS NOT NULL AND is_active = 1
         """)
-        return _fetchall_as_dicts(cursor)
+        return _fetchall_as_dicts(cursor, is_pg)
     finally:
         conn.close()
 
 
 def mark_deal_inactive(product_id: str):
-    ph = _placeholder()
     conn = get_connection()
+    ph = _ph(conn)
     try:
         cursor = conn.cursor()
         cursor.execute(f"UPDATE seen_deals SET is_active = 0 WHERE product_id = {ph}", (product_id,))
@@ -313,13 +348,13 @@ def mark_deal_inactive(product_id: str):
 
 def get_stats():
     conn = get_connection()
+    ph = _ph(conn)
+    today_start = _db_ts(conn, datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0))
     try:
         cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM seen_deals")
         total = cursor.fetchone()[0]
 
-        ph = _placeholder()
-        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
         cursor.execute(f"SELECT COUNT(*) FROM seen_deals WHERE created_at >= {ph}", (today_start,))
         today = cursor.fetchone()[0]
 
@@ -340,9 +375,9 @@ def cleanup_old_deals(days=None):
         repeat_days = int(get_setting("repeat_days", "2"))
         days = max(repeat_days * 2, 14)
 
-    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
-    ph = _placeholder()
     conn = get_connection()
+    ph = _ph(conn)
+    cutoff = _db_ts(conn, datetime.now(timezone.utc) - timedelta(days=days))
     try:
         cursor = conn.cursor()
         cursor.execute(f"DELETE FROM seen_deals WHERE created_at < {ph}", (cutoff,))

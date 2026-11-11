@@ -1,11 +1,11 @@
 import requests
 from config import Config
 from affiliate import format_shopee_affiliate_link
-from database import is_deal_seen
+from database import is_deal_seen, get_setting
 
 def fetch_shopee_deals(limit=50):
     """
-    Fetches hot deals from Shopee Flash Sale API.
+    Fetches hot deals from Shopee Flash Sale API without intra-batch duplicates.
     """
     url = f"https://shopee.com.br/api/v4/flash_sale/flash_sale_get_items?limit={limit}&offset=0"
     headers = {
@@ -14,7 +14,10 @@ def fetch_shopee_deals(limit=50):
         "Accept": "application/json"
     }
 
+    min_discount = int(get_setting("min_discount", str(Config.MIN_DISCOUNT_PERCENT)))
     deals = []
+    seen_ids_in_batch = set()
+    seen_titles_in_batch = set()
     try:
         resp = requests.get(url, headers=headers, timeout=12)
         if resp.status_code != 200:
@@ -28,11 +31,14 @@ def fetch_shopee_deals(limit=50):
             item_id = str(item.get("itemid", ""))
             shop_id = str(item.get("shopid", ""))
             name = item.get("name", "").strip()
+            norm_name = name.lower()
 
             if not item_id or not name:
                 continue
 
             product_id = f"shopee_{shop_id}_{item_id}"
+            if product_id in seen_ids_in_batch or norm_name in seen_titles_in_batch:
+                continue
             if is_deal_seen(product_id, title=name):
                 continue
 
@@ -48,8 +54,11 @@ def fetch_shopee_deals(limit=50):
             if not discount_percent and orig_price > curr_price and orig_price > 0:
                 discount_percent = round(((orig_price - curr_price) / orig_price) * 100)
 
-            if discount_percent < Config.MIN_DISCOUNT_PERCENT:
+            if discount_percent < min_discount:
                 continue
+
+            seen_ids_in_batch.add(product_id)
+            seen_titles_in_batch.add(norm_name)
 
             # Image (Garante que só envia ofertas com foto)
             image_hash = item.get("image") or ""
@@ -61,9 +70,9 @@ def fetch_shopee_deals(limit=50):
 
             image_url = f"https://down-br.img.susercontent.com/file/{image_hash}"
 
-            # Product URL & Affiliate conversion
+            # Product URL & Affiliate conversion (shortened right before sending)
             product_url = f"https://shopee.com.br/product/{shop_id}/{item_id}"
-            affiliate_url = format_shopee_affiliate_link(product_url, shop_id=shop_id, item_id=item_id)
+            affiliate_url = format_shopee_affiliate_link(product_url, shop_id=shop_id, item_id=item_id, shorten=False)
 
             curr_price_str = f"{curr_price:.2f}".replace(".", ",")
             orig_price_str = f"{orig_price:.2f}".replace(".", ",") if orig_price > 0 else ""

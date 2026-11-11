@@ -14,13 +14,18 @@ if hasattr(sys.stderr, "reconfigure"):
 from config import Config
 from database import (
     save_deal, get_stats, cleanup_old_deals, get_setting, set_setting,
-    get_active_posted_deals, mark_deal_inactive
+    get_active_posted_deals, mark_deal_inactive, is_deal_seen
 )
 from scraper_ml import fetch_mercadolivre_deals
 from scraper_shopee import fetch_shopee_deals
+from affiliate import shorten_url
 from telegram_client import TelegramClient
 from formatter import format_whatsapp_message
 from web_server import start_health_server
+
+# Prevents concurrent scans (e.g. timer + /ofertas button) from overlapping
+_scanner_lock = threading.Lock()
+_start_with_ml = True
 
 def is_within_schedule() -> tuple:
     """
@@ -55,6 +60,7 @@ def build_panel_data():
     comments_active = get_setting("comments_enabled", "true") == "true"
     interval = get_setting("check_interval", str(Config.CHECK_INTERVAL_MINUTES))
     min_disc = get_setting("min_discount", str(Config.MIN_DISCOUNT_PERCENT))
+    max_deals = get_setting("max_deals_per_run", str(Config.MAX_DEALS_PER_RUN))
     start_hour = int(get_setting("start_hour", "8"))
     end_hour = int(get_setting("end_hour", "22"))
     active_days = get_setting("active_days", "todos")
@@ -82,6 +88,7 @@ def build_panel_data():
 
     status_str = "✅ ATIVADAS" if comments_active else "❌ DESATIVADAS"
     toggle_label = "💬 Frases: DESATIVAR" if comments_active else "💬 Frases: ATIVAR"
+    deals_label = "1 oferta" if max_deals == "1" else f"{max_deals} ofertas"
 
     text = (
         "⚙️ <b>Painel de Opções do Bot de Ofertas</b>\n\n"
@@ -92,6 +99,7 @@ def build_panel_data():
         f"🔄 <b>Repetir Produtos:</b> <code>{repeat_str}</code>\n"
         f"⏱️ <b>Intervalo Automático:</b> <code>A cada {interval} min</code>\n"
         f"🏷️ <b>Desconto Mínimo:</b> <code>{min_disc}% OFF</code>\n"
+        f"📨 <b>Ofertas por Vez:</b> <code>{deals_label}</code>\n"
         f"🛍️ <b>Plataformas:</b> <code>Shopee & Mercado Livre (Afiliada Bianca)</code>\n"
     )
 
@@ -107,6 +115,7 @@ def build_panel_data():
                 {"text": f"⏱️ A cada: {interval}m", "callback_data": "cycle_interval"},
                 {"text": f"🏷️ Mínimo: {min_disc}%", "callback_data": "cycle_discount"}
             ],
+            [{"text": f"📨 Por vez: {deals_label}", "callback_data": "cycle_max_deals"}],
             [{"text": "🔎 Buscar Novas Ofertas Agora", "callback_data": "trigger_deals"}]
         ]
     }
@@ -187,6 +196,7 @@ def run_dry_run_test():
     print("=" * 60)
 
     sample = all_deals[0]
+    sample["link"] = shorten_url(sample.get("link", ""))
     wa_msg = format_whatsapp_message(sample)
     print(wa_msg)
 
@@ -259,55 +269,87 @@ def check_and_remove_expired_deals(telegram: TelegramClient):
 
 def run_deal_scanner(telegram: TelegramClient, chat_id: str = None, max_deals: int = None) -> int:
     """Scans for new deals and dispatches them to Telegram."""
+    global _start_with_ml
     target_chat = chat_id or Config.TELEGRAM_CHAT_ID
     if not target_chat:
         print("[Alerta] TELEGRAM_CHAT_ID não configurado no .env")
         return 0
 
-    max_limit = max_deals or Config.MAX_DEALS_PER_RUN
-    print(f"\n[{datetime.now().strftime('%H:%M:%S')}] 🔎 Iniciando varredura de ofertas (limite: {max_limit})...")
+    with _scanner_lock:
+        max_limit = max_deals if max_deals is not None else int(
+            get_setting("max_deals_per_run", str(Config.MAX_DEALS_PER_RUN))
+        )
+        print(f"\n[{datetime.now().strftime('%H:%M:%S')}] 🔎 Iniciando varredura de ofertas (limite: {max_limit})...")
 
-    shopee_deals = []
-    ml_deals = []
+        shopee_deals = []
+        ml_deals = []
 
-    try:
-        shopee_deals = fetch_shopee_deals(limit=50)
-    except Exception as e:
-        print(f"[Erro] Falha ao coletar Shopee: {e}")
-
-    # Só busca no Mercado Livre se houver ML_AFFILIATE_TAG configurada
-    if Config.ML_AFFILIATE_TAG:
         try:
-            ml_deals = fetch_mercadolivre_deals(limit_per_category=3)
+            shopee_deals = fetch_shopee_deals(limit=50)
         except Exception as e:
-            print(f"[Erro] Falha ao coletar Mercado Livre: {e}")
+            print(f"[Erro] Falha ao coletar Shopee: {e}")
 
-    # Ordena cada plataforma individualmente pelo maior desconto
-    shopee_deals.sort(key=lambda x: x.get("discount_percent", 0), reverse=True)
-    ml_deals.sort(key=lambda x: x.get("discount_percent", 0), reverse=True)
+        # Só busca no Mercado Livre se houver ML_AFFILIATE_TAG configurada
+        if Config.ML_AFFILIATE_TAG:
+            try:
+                ml_deals = fetch_mercadolivre_deals(limit_per_category=3)
+            except Exception as e:
+                print(f"[Erro] Falha ao coletar Mercado Livre: {e}")
 
-    # Intercala Mercado Livre e Shopee para garantir que AMBAS apareçam no grupo
-    selected_deals = []
-    idx_s, idx_m = 0, 0
-    while len(selected_deals) < max_limit and (idx_s < len(shopee_deals) or idx_m < len(ml_deals)):
-        if idx_m < len(ml_deals) and len(selected_deals) < max_limit:
-            selected_deals.append(ml_deals[idx_m])
-            idx_m += 1
-        if idx_s < len(shopee_deals) and len(selected_deals) < max_limit:
-            selected_deals.append(shopee_deals[idx_s])
-            idx_s += 1
+        # Ordena cada plataforma individualmente pelo maior desconto
+        shopee_deals.sort(key=lambda x: x.get("discount_percent", 0), reverse=True)
+        ml_deals.sort(key=lambda x: x.get("discount_percent", 0), reverse=True)
 
-    sent_count = 0
-    for deal in selected_deals:
-        print(f"  📤 Enviando [{deal['platform']}]: {deal['title'][:40]}... ({deal['discount_percent']}% OFF)")
-        msg_id = telegram.send_deal(target_chat, deal)
-        if msg_id:
-            save_deal(deal, message_id=msg_id)
-            sent_count += 1
-            time.sleep(2)  # brief pause to avoid Telegram rate limits
+        # Intercala Mercado Livre e Shopee alternando quem começa a cada rodada
+        candidate_deals = []
+        idx_s, idx_m = 0, 0
+        ml_first = _start_with_ml
+        _start_with_ml = not _start_with_ml
 
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ Varredura finalizada. {sent_count} novas ofertas enviadas.")
-    return sent_count
+        while idx_s < len(shopee_deals) or idx_m < len(ml_deals):
+            if ml_first:
+                if idx_m < len(ml_deals):
+                    candidate_deals.append(ml_deals[idx_m])
+                    idx_m += 1
+                if idx_s < len(shopee_deals):
+                    candidate_deals.append(shopee_deals[idx_s])
+                    idx_s += 1
+            else:
+                if idx_s < len(shopee_deals):
+                    candidate_deals.append(shopee_deals[idx_s])
+                    idx_s += 1
+                if idx_m < len(ml_deals):
+                    candidate_deals.append(ml_deals[idx_m])
+                    idx_m += 1
+
+        sent_count = 0
+        sent_ids = set()
+        sent_titles = set()
+
+        for deal in candidate_deals:
+            if sent_count >= max_limit:
+                break
+
+            pid = deal.get("id", "")
+            title = deal.get("title", "").strip()
+            norm_title = title.lower()
+
+            if pid in sent_ids or norm_title in sent_titles or is_deal_seen(pid, title=title):
+                print(f"  ⏭️ Pulando duplicata: {title[:40]}")
+                continue
+
+            deal["link"] = shorten_url(deal.get("link", ""))
+            print(f"  📤 Enviando [{deal['platform']}]: {title[:40]}... ({deal['discount_percent']}% OFF)")
+            msg_id = telegram.send_deal(target_chat, deal)
+            if msg_id:
+                save_deal(deal, message_id=msg_id)
+                sent_ids.add(pid)
+                sent_titles.add(norm_title)
+                sent_count += 1
+                time.sleep(2)  # brief pause to avoid Telegram rate limits
+
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ Varredura finalizada. {sent_count} novas ofertas enviadas.")
+        return sent_count
 
 def handle_telegram_updates(telegram: TelegramClient):
     """Listens for user commands and inline button callbacks."""
@@ -413,6 +455,18 @@ def handle_telegram_updates(telegram: TelegramClient):
                         text, kb = build_panel_data()
                         telegram.edit_message_text(chat_id, msg_id, text, reply_markup=kb)
 
+                    elif data == "cycle_max_deals":
+                        deal_presets = ["1", "2", "3", "4", "5"]
+                        curr = get_setting("max_deals_per_run", str(Config.MAX_DEALS_PER_RUN))
+                        next_idx = (deal_presets.index(curr) + 1) % len(deal_presets) if curr in deal_presets else 0
+                        new_val = deal_presets[next_idx]
+
+                        set_setting("max_deals_per_run", new_val)
+                        label = "1 oferta" if new_val == "1" else f"{new_val} ofertas"
+                        telegram.answer_callback_query(cb_id, text=f"📨 Quantidade por envio alterada para {label}!")
+                        text, kb = build_panel_data()
+                        telegram.edit_message_text(chat_id, msg_id, text, reply_markup=kb)
+
                     elif data == "start_bot_official":
                         set_setting("bot_activated", "true")
                         telegram.answer_callback_query(cb_id, text="🚀 Trabalhos iniciados oficialmente com sucesso!", show_alert=True)
@@ -429,7 +483,7 @@ def handle_telegram_updates(telegram: TelegramClient):
 
                     elif data == "trigger_deals":
                         telegram.answer_callback_query(cb_id, text="🔎 Buscando ofertas relâmpago agora...")
-                        run_deal_scanner(telegram, chat_id=chat_id, max_deals=3)
+                        run_deal_scanner(telegram, chat_id=chat_id)
 
                     continue
 
@@ -471,7 +525,7 @@ def handle_telegram_updates(telegram: TelegramClient):
 
                 elif text.startswith("/ofertas"):
                     telegram.send_message(chat_id, "🔎 Buscando as melhores ofertas relâmpago na Shopee e no Mercado Livre agora, aguarde um instante...")
-                    sent = run_deal_scanner(telegram, chat_id=chat_id, max_deals=3)
+                    sent = run_deal_scanner(telegram, chat_id=chat_id)
                     if sent == 0:
                         telegram.send_message(chat_id, "ℹ️ Nenhuma nova oferta com super desconto encontrada no momento. Buscarei novamente em breve!")
 
@@ -479,6 +533,7 @@ def handle_telegram_updates(telegram: TelegramClient):
                     stats = get_stats()
                     interval = get_setting("check_interval", str(Config.CHECK_INTERVAL_MINUTES))
                     min_disc = get_setting("min_discount", str(Config.MIN_DISCOUNT_PERCENT))
+                    max_deals = get_setting("max_deals_per_run", str(Config.MAX_DEALS_PER_RUN))
                     comments_active = get_setting("comments_enabled", "true") == "true"
                     c_status = "Ativadas" if comments_active else "Desativadas"
                     start_h = int(get_setting("start_hour", "8"))
@@ -489,6 +544,7 @@ def handle_telegram_updates(telegram: TelegramClient):
                     rep_days = get_setting("repeat_days", "2")
                     rep_map = {"2": "Após 2 dias", "3": "Após 3 dias", "7": "Após 7 dias", "30": "Nunca (30d)"}
                     r_str = rep_map.get(rep_days, "Após 2 dias")
+                    deals_label = "1 oferta" if max_deals == "1" else f"{max_deals} ofertas"
 
                     status_msg = (
                         f"📊 <b>Painel do Bot de Ofertas</b>\n\n"
@@ -499,6 +555,7 @@ def handle_telegram_updates(telegram: TelegramClient):
                         f"🔄 <b>Repetir produtos:</b> {r_str}\n"
                         f"⏱️ <b>Verificação automática:</b> A cada {interval} minutos\n"
                         f"🏷️ <b>Desconto mínimo:</b> {min_disc}% OFF\n"
+                        f"📨 <b>Ofertas por vez:</b> {deals_label}\n"
                         f"💬 <b>Frases nos produtos:</b> {c_status}\n"
                         f"🗑️ <b>Auto-remover expirados:</b> Ativado (Shopee & ML)\n"
                         f"🛍️ <b>Plataformas ativas:</b> Shopee & Mercado Livre (Afiliada Bianca)"
