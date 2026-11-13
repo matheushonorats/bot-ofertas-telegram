@@ -15,7 +15,8 @@ if hasattr(sys.stderr, "reconfigure"):
 from config import Config
 from database import (
     save_deal, delete_deal, get_stats, cleanup_old_deals, get_setting, set_setting,
-    get_active_posted_deals, mark_deal_inactive, is_deal_seen
+    get_active_posted_deals, mark_deal_inactive, is_deal_seen,
+    get_dagd_deals, delete_dagd_deals
 )
 from scraper_ml import fetch_mercadolivre_deals
 from scraper_shopee import fetch_shopee_deals
@@ -318,6 +319,7 @@ def setup_commands(telegram: TelegramClient):
     """Registers official command buttons in Telegram menu."""
     commands = [
         {"command": "ofertas", "description": "🔎 Buscar ofertas relâmpago na Shopee agora"},
+        {"command": "refazer", "description": "🧹 Apagar ofertas antigas e enviar novas com link oficial"},
         {"command": "painel", "description": "⚙️ Painel de opções (ativar/desativar frases e filtros)"},
         {"command": "status", "description": "📊 Ver quantas ofertas foram enviadas hoje"},
         {"command": "ajuda", "description": "❓ Como compartilhar no WhatsApp"}
@@ -422,6 +424,37 @@ def check_and_remove_expired_deals(telegram: TelegramClient):
             print(f"[Auto-Remoção] 🗑️ Apagando do Telegram ({reason}): {deal.get('title', '')[:35]}...")
             telegram.delete_message(target_chat, msg_id)
             mark_deal_inactive(pid)
+
+def cleanup_and_repost_dagd_deals(telegram: TelegramClient, chat_id: str = None) -> tuple:
+    """
+    Deletes any previously posted Telegram messages containing da.gd links,
+    removes them from seen_deals, and dispatches fresh replacement deals with official store links.
+    Returns (deleted_count, new_sent_count).
+    """
+    target_chat = chat_id or Config.TELEGRAM_CHAT_ID
+    if not target_chat:
+        return 0, 0
+
+    dagd_deals = get_dagd_deals()
+    deleted_count = 0
+    if dagd_deals:
+        print(f"[Cleanup] 🧹 Encontradas {len(dagd_deals)} ofertas com link da.gd para remover do Telegram...")
+        for deal in dagd_deals:
+            msg_id = deal.get("telegram_message_id")
+            if msg_id:
+                try:
+                    telegram.delete_message(target_chat, msg_id)
+                    deleted_count += 1
+                    time.sleep(0.5)
+                except Exception as e:
+                    print(f"[Cleanup] Erro ao apagar msg {msg_id}: {e}")
+
+        delete_dagd_deals()
+        print(f"[Cleanup] ✅ {deleted_count} mensagens com link da.gd apagadas com sucesso.")
+
+    # Rescan and post fresh deals with official store links
+    new_sent = run_deal_scanner(telegram, chat_id=target_chat)
+    return deleted_count, new_sent
 
 def run_deal_scanner(telegram: TelegramClient, chat_id: str = None, max_deals: int = None) -> int:
     """Scans for new deals and dispatches them to Telegram."""
@@ -776,6 +809,14 @@ def handle_telegram_updates(telegram: TelegramClient):
                     if sent == 0:
                         telegram.send_message(chat_id, "ℹ️ Nenhuma nova oferta com super desconto encontrada no momento. Buscarei novamente em breve!")
 
+                elif text.startswith("/refazer"):
+                    telegram.send_message(chat_id, "🧹 Apagando do Telegram as mensagens com link antigo e enviando novas ofertas com os links oficiais das lojas...")
+                    deleted, sent = cleanup_and_repost_dagd_deals(telegram, chat_id=chat_id)
+                    telegram.send_message(
+                        chat_id,
+                        f"✅ Concluído! {deleted} mensagens antigas apagadas e {sent} novas ofertas enviadas com os links oficiais da Shopee e do Mercado Livre."
+                    )
+
                 elif text.startswith("/status"):
                     stats = get_stats()
                     interval = get_setting("check_interval", str(Config.CHECK_INTERVAL_MINUTES))
@@ -911,6 +952,12 @@ def main():
 
     # Inicia o servidor web interno para o Render / cloud
     start_health_server()
+
+    # Limpa automaticamente mensagens antigas com link da.gd e envia novas ofertas com links oficiais
+    try:
+        cleanup_and_repost_dagd_deals(telegram)
+    except Exception as e:
+        print(f"[Cleanup Inicial] Erro na limpeza: {e}")
 
     if args.scan:
         run_deal_scanner(telegram)

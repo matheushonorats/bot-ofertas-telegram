@@ -9,32 +9,11 @@ from config import Config
 
 def shorten_url(url: str) -> str:
     """
-    Shortens a long affiliate URL cleanly while preserving query parameters.
-    Tries da.gd first (no Cloudflare interstitial, never Viglink), then is.gd fallback,
-    or returns the original URL directly.
+    Returns the clean official URL.
+    Does not use third-party shorteners (like da.gd or is.gd) that show warning/interstitial pages
+    or get blocked by mobile browsers. Both Shopee (s.shopee.com.br) and Mercado Livre
+    (mercadolivre.com.br) links are kept on their official trusted domains.
     """
-    if not url:
-        return ""
-    if any(domain in url for domain in ("da.gd/", "is.gd/", "shp.ee/", "meli.la/")):
-        return url
-    if "s.shopee" in url and "/an_redir" not in url:
-        return url
-    try:
-        resp = requests.get("https://da.gd/s", params={"url": url}, timeout=6)
-        short = resp.text.strip()
-        if resp.status_code == 200 and short.startswith("https://da.gd/"):
-            return short
-    except Exception as e:
-        print(f"[Shortener] da.gd indisponível ({e}), tentando fallback is.gd...")
-
-    try:
-        resp = requests.get("https://is.gd/create.php", params={"format": "simple", "url": url}, timeout=6)
-        short = resp.text.strip()
-        if resp.status_code == 200 and short.startswith("https://is.gd/"):
-            return short
-    except Exception as e:
-        print(f"[Shortener] is.gd indisponível ({e}), mantendo link direto.")
-
     return url
 
 def generate_shopee_short_link(original_url: str) -> str:
@@ -90,18 +69,26 @@ def generate_shopee_short_link(original_url: str) -> str:
     return ""
 
 def format_ml_affiliate_link(url: str, shorten: bool = True) -> str:
-    """Formats Mercado Livre product URL with affiliate tag or custom template."""
+    """Formats Mercado Livre product URL with affiliate tag on official mercadolivre.com.br domain."""
     clean_url = url.split("?")[0].split("#")[0]
+
+    # Use clean short catalog URL /p/MLB... when available for much shorter official links
+    p_match = re.search(r"/p/(MLB\d+)", clean_url)
+    if p_match:
+        base_url = f"https://www.mercadolivre.com.br/p/{p_match.group(1)}"
+    else:
+        base_url = clean_url
+
     tag = Config.ML_AFFILIATE_TAG
     template = Config.ML_AFFILIATE_URL_TEMPLATE
 
     if template:
-        final_url = template.format(url=clean_url, tag=tag)
+        final_url = template.format(url=base_url, tag=tag)
     elif tag:
-        separator = "&" if "?" in clean_url else "?"
-        final_url = f"{clean_url}{separator}{tag}"
+        separator = "&" if "?" in base_url else "?"
+        final_url = f"{base_url}{separator}{tag}"
     else:
-        final_url = clean_url
+        final_url = base_url
 
     return shorten_url(final_url) if shorten else final_url
 

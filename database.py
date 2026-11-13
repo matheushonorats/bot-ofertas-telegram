@@ -417,6 +417,40 @@ def mark_deal_inactive(product_id: str):
         conn.close()
 
 
+def get_dagd_deals():
+    """Returns all active deals that were posted with da.gd links."""
+    conn = get_connection()
+    is_pg = _is_pg(conn)
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT product_id, telegram_message_id, url, title
+            FROM seen_deals
+            WHERE telegram_message_id IS NOT NULL 
+              AND is_active = 1 
+              AND url LIKE '%da.gd%'
+        """)
+        return _fetchall_as_dicts(cursor, is_pg)
+    except Exception as e:
+        print(f"[DB Error] get_dagd_deals: {e}")
+        return []
+    finally:
+        conn.close()
+
+
+def delete_dagd_deals():
+    """Deletes deals with da.gd links from seen_deals so they can be re-scanned and re-posted."""
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM seen_deals WHERE url LIKE '%da.gd%'")
+        conn.commit()
+    except Exception as e:
+        print(f"[DB Error] delete_dagd_deals: {e}")
+    finally:
+        conn.close()
+
+
 def get_stats():
     conn = get_connection()
     ph = _ph(conn)
