@@ -25,8 +25,9 @@ def load_dotenv(dotenv_path=None):
             if key not in os.environ:
                 os.environ[key] = val
 
-# Load .env
-load_dotenv()
+# Load environment variables (.env.local has priority over .env)
+load_dotenv(BASE_DIR / ".env.local")
+load_dotenv(BASE_DIR / ".env")
 
 class Config:
     # Telegram

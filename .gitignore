@@ -2,3 +2,8 @@ __pycache__/
 *.pyc
 deals.db
 .env
+.env.local
+.env.*
+.neon
+node_modules/
+
