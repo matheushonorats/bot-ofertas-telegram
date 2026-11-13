@@ -221,6 +221,11 @@ def build_panel_data():
     header_style = get_setting("msg_header_style", "direct")
     style_label = HEADER_STYLES.get(header_style, HEADER_STYLES["direct"])
 
+    super_enabled = get_setting("super_deals_enabled", "true") == "true"
+    super_min_disc = get_setting("super_deal_min_discount", "60")
+    super_status = f"✅ ATIVO (≥ {super_min_disc}% OFF)" if super_enabled else "❌ DESATIVADO"
+    super_btn_label = f"🚨 Super Achados: ≥{super_min_disc}%" if super_enabled else "🚨 Super Achados: DESATIVADO"
+
     if start_hour == 0 and end_hour == 24:
         hours_str = "24h (Sem pausa)"
     else:
@@ -249,19 +254,21 @@ def build_panel_data():
         "⚙️ <b>Painel de Opções do Bot de Ofertas</b>\n\n"
         "<i>Toque nos botões abaixo para personalizar o comportamento do bot:</i>\n\n"
         f"💬 <b>Frases nos Produtos:</b> <code>{status_str}</code>\n"
+        f"🚨 <b>Super Achados Imediatos:</b> <code>{super_status}</code>\n"
         f"✏️ <b>Estilo da Mensagem:</b> <code>{html.escape(style_label)}</code>\n"
         f"⏰ <b>Horário de Funcionamento:</b> <code>{hours_str}</code>\n"
         f"📅 <b>Dias de Envio:</b> <code>{days_str}</code>\n"
         f"🔄 <b>Repetir Produtos:</b> <code>{repeat_str}</code>\n"
         f"⏱️ <b>Intervalo Automático:</b> <code>A cada {interval} min</code>\n"
-        f"🏷️ <b>Desconto Mínimo:</b> <code>{min_disc}% OFF</code>\n"
-        f"📨 <b>Ofertas por Vez:</b> <code>{deals_label}</code>\n"
+        f"🏷️ <b>Desconto Mínimo Normal:</b> <code>{min_disc}% OFF</code>\n"
+        f"📨 <b>Ofertas Normais por Vez:</b> <code>{deals_label}</code>\n"
         f"🛍️ <b>Plataformas:</b> <code>Shopee & Mercado Livre (Afiliada Bianca)</code>\n"
     )
 
     keyboard = {
         "inline_keyboard": [
             [{"text": toggle_label, "callback_data": "toggle_comments"}],
+            [{"text": super_btn_label, "callback_data": "cycle_super_deals"}],
             [
                 {"text": f"⏰ Horário: {hours_str}", "callback_data": "cycle_hours"},
                 {"text": f"📅 Dias: {days_str}", "callback_data": "cycle_days"}
@@ -318,7 +325,8 @@ def get_bianca_presentation() -> tuple:
 def setup_commands(telegram: TelegramClient):
     """Registers official command buttons in Telegram menu."""
     commands = [
-        {"command": "ofertas", "description": "🔎 Buscar ofertas relâmpago na Shopee agora"},
+        {"command": "superachados", "description": "🚨 Buscar Super Achados / Bugs (≥ 60% OFF) agora"},
+        {"command": "ofertas", "description": "🔎 Buscar ofertas normais na Shopee & ML agora"},
         {"command": "refazer", "description": "🧹 Apagar ofertas antigas e enviar novas com link oficial"},
         {"command": "painel", "description": "⚙️ Painel de opções (ativar/desativar frases e filtros)"},
         {"command": "status", "description": "📊 Ver quantas ofertas foram enviadas hoje"},
@@ -456,6 +464,66 @@ def cleanup_and_repost_dagd_deals(telegram: TelegramClient, chat_id: str = None)
     new_sent = run_deal_scanner(telegram, chat_id=target_chat)
     return deleted_count, new_sent
 
+def scan_and_dispatch_super_deals(telegram: TelegramClient, chat_id: str = None) -> int:
+    """
+    Scans specifically for high-urgency deals (discount >= super_deal_min_discount)
+    and sends them to the group immediately with Super Achado formatting.
+    """
+    target_chat = chat_id or Config.TELEGRAM_CHAT_ID
+    if not target_chat:
+        return 0
+
+    if get_setting("super_deals_enabled", "true") != "true":
+        return 0
+
+    in_schedule, reason = is_within_schedule()
+    if not in_schedule or get_setting("bot_activated", "true") != "true":
+        return 0
+
+    super_min = int(get_setting("super_deal_min_discount", "60"))
+
+    with _scanner_lock:
+        shopee_deals = []
+        ml_deals = []
+
+        try:
+            shopee_deals = fetch_shopee_deals(limit=50)
+        except Exception as e:
+            print(f"[Super Achados] Erro ao buscar Shopee: {e}")
+
+        if Config.ML_AFFILIATE_TAG:
+            try:
+                ml_deals = fetch_mercadolivre_deals(limit_per_category=2)
+            except Exception as e:
+                print(f"[Super Achados] Erro ao buscar ML: {e}")
+
+        candidates = [
+            d for d in (shopee_deals + ml_deals)
+            if d.get("discount_percent", 0) >= super_min
+        ]
+        candidates.sort(key=lambda x: x.get("discount_percent", 0), reverse=True)
+
+        sent_count = 0
+        for deal in candidates:
+            pid = deal.get("id", "")
+            title = deal.get("title", "").strip()
+
+            if is_deal_seen(pid, title=title):
+                continue
+
+            deal["is_super_deal"] = True
+            deal["link"] = shorten_url(deal.get("link", ""))
+            print(f"[Super Achados] 🚨 Enviando IMEDIATAMENTE [{deal['platform']}]: {title[:40]} ({deal['discount_percent']}% OFF)")
+            msg_id = telegram.send_deal(target_chat, deal)
+            if msg_id:
+                save_deal(deal, message_id=msg_id)
+                sent_count += 1
+                time.sleep(2)
+
+        if sent_count > 0:
+            print(f"[Super Achados] ✅ {sent_count} Super Achados enviados imediatamente ao grupo!")
+        return sent_count
+
 def run_deal_scanner(telegram: TelegramClient, chat_id: str = None, max_deals: int = None) -> int:
     """Scans for new deals and dispatches them to Telegram."""
     global _start_with_ml
@@ -527,6 +595,11 @@ def run_deal_scanner(telegram: TelegramClient, chat_id: str = None, max_deals: i
                 print(f"  ⏭️ Pulando duplicata: {title[:40]}")
                 continue
 
+            if get_setting("super_deals_enabled", "true") == "true":
+                super_min = int(get_setting("super_deal_min_discount", "60"))
+                if deal.get("discount_percent", 0) >= super_min:
+                    deal["is_super_deal"] = True
+
             deal["link"] = shorten_url(deal.get("link", ""))
             print(f"  📤 Enviando [{deal['platform']}]: {title[:40]}... ({deal['discount_percent']}% OFF)")
             msg_id = telegram.send_deal(target_chat, deal)
@@ -566,6 +639,20 @@ def handle_telegram_updates(telegram: TelegramClient):
                         set_setting("comments_enabled", new_val)
                         alert = "❌ Frases descontraídas desativadas!" if new_val == "false" else "✅ Frases descontraídas ativadas!"
                         telegram.answer_callback_query(cb_id, text=alert)
+                        text, kb = build_panel_data()
+                        telegram.edit_message_text(chat_id, msg_id, text, reply_markup=kb)
+
+                    elif data == "cycle_super_deals":
+                        presets = [("true", "60"), ("true", "70"), ("true", "50"), ("false", "60")]
+                        curr_enabled = get_setting("super_deals_enabled", "true")
+                        curr_disc = get_setting("super_deal_min_discount", "60")
+                        curr_state = (curr_enabled, curr_disc)
+                        next_idx = (presets.index(curr_state) + 1) % len(presets) if curr_state in presets else 0
+                        new_enabled, new_disc = presets[next_idx]
+                        set_setting("super_deals_enabled", new_enabled)
+                        set_setting("super_deal_min_discount", new_disc)
+                        alert_txt = f"🚨 Super Achados configurado para ≥ {new_disc}% OFF!" if new_enabled == "true" else "🚨 Super Achados desativado!"
+                        telegram.answer_callback_query(cb_id, text=alert_txt)
                         text, kb = build_panel_data()
                         telegram.edit_message_text(chat_id, msg_id, text, reply_markup=kb)
 
@@ -803,6 +890,15 @@ def handle_telegram_updates(telegram: TelegramClient):
                     pres_text, pres_kb = get_bianca_presentation()
                     telegram.send_message(chat_id, pres_text, reply_markup=pres_kb)
 
+                elif text.startswith("/superachados") or text.startswith("/super"):
+                    super_min = get_setting("super_deal_min_discount", "60")
+                    telegram.send_message(chat_id, f"🚨 Buscando Super Achados / Bugs (≥ {super_min}% OFF) agora...")
+                    sent = scan_and_dispatch_super_deals(telegram, chat_id=chat_id)
+                    if sent == 0:
+                        telegram.send_message(chat_id, f"ℹ️ Nenhum Super Achado novo com ≥ {super_min}% OFF encontrado no momento.")
+                    else:
+                        telegram.send_message(chat_id, f"✅ {sent} Super Achados enviados imediatamente ao grupo!")
+
                 elif text.startswith("/ofertas"):
                     telegram.send_message(chat_id, "🔎 Buscando as melhores ofertas relâmpago na Shopee e no Mercado Livre agora, aguarde um instante...")
                     sent = run_deal_scanner(telegram, chat_id=chat_id)
@@ -834,10 +930,15 @@ def handle_telegram_updates(telegram: TelegramClient):
                     r_str = rep_map.get(rep_days, "Após 2 dias")
                     deals_label = "1 oferta" if max_deals == "1" else f"{max_deals} ofertas"
 
+                    super_enabled = get_setting("super_deals_enabled", "true") == "true"
+                    super_min = get_setting("super_deal_min_discount", "60")
+                    super_status = f"Ativado (≥ {super_min}% OFF)" if super_enabled else "Desativado"
+
                     status_msg = (
                         f"📊 <b>Painel do Bot de Ofertas</b>\n\n"
                         f"🔥 <b>Ofertas enviadas hoje:</b> {stats['today']}\n"
                         f"📦 <b>Total histórico de ofertas:</b> {stats['total']}\n"
+                        f"🚨 <b>Super Achados Imediatos:</b> {super_status}\n"
                         f"⏰ <b>Horário ativo:</b> {h_str}\n"
                         f"📅 <b>Dias ativos:</b> {d_str}\n"
                         f"🔄 <b>Repetir produtos:</b> {r_str}\n"
@@ -924,6 +1025,19 @@ def scheduled_worker(telegram: TelegramClient):
             interval_seconds = 600
         time.sleep(interval_seconds)
 
+def super_deals_worker(telegram: TelegramClient):
+    """
+    Fast background worker that periodically checks for Super Achados / Bugs (every 2 minutes).
+    Dispatches immediately when found without waiting for the normal interval.
+    """
+    print("🚀 [Super Achados] Monitor imediato em segundo plano ativo (checagem a cada 2 minutos)...")
+    while True:
+        try:
+            scan_and_dispatch_super_deals(telegram)
+        except Exception as e:
+            print(f"[Super Achados] Erro no worker: {e}")
+        time.sleep(120)
+
 def main():
     parser = argparse.ArgumentParser(description="Bot de Ofertas Shopee para Telegram / WhatsApp")
     parser.add_argument("--test", action="store_true", help="Executa um teste sem enviar ao Telegram")
@@ -966,6 +1080,9 @@ def main():
     print("⚡ Iniciando agendador em segundo plano...")
     timer_thread = threading.Thread(target=scheduled_worker, args=(telegram,), daemon=True)
     timer_thread.start()
+
+    super_thread = threading.Thread(target=super_deals_worker, args=(telegram,), daemon=True)
+    super_thread.start()
 
     # Run Telegram command polling in main thread
     handle_telegram_updates(telegram)

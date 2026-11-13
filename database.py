@@ -170,6 +170,8 @@ def init_db():
             ("active_days", "todos"),
             ("repeat_days", "2"),
             ("bot_activated", "true"),
+            ("super_deals_enabled", "true"),
+            ("super_deal_min_discount", "60"),
         ]
         for key, value in defaults:
             if is_pg:

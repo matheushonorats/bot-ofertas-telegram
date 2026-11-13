@@ -95,8 +95,17 @@ def format_whatsapp_message(deal: dict) -> str:
     else:
         store_coupon = ""
 
+    is_super_deal = bool(deal.get("is_super_deal"))
     first_line = _render_header_line(deal, header_style, custom_header)
-    lines = [first_line]
+    
+    if is_super_deal:
+        lines = [
+            "🚨 *SUPER ACHADO / ERRO DE PREÇO?* 🚨",
+            first_line,
+            "⚡ _Corre antes que o estoque esgote ou o preço volte ao normal!_"
+        ]
+    else:
+        lines = [first_line]
 
     if comment:
         lines.append(f"_{comment}_")
@@ -146,9 +155,15 @@ def format_telegram_caption(deal: dict, whatsapp_text: str) -> str:
     escaped_platform = html.escape(platform)
     escaped_wa = html.escape(whatsapp_text)
 
+    is_super_deal = bool(deal.get("is_super_deal"))
+    super_header = "🚨 <b>SUPER ACHADO / ERRO DE PREÇO?</b> 🚨\n" if is_super_deal else ""
+    urgency_line = "⚡ <i>Corre antes que o estoque esgote ou o preço suba!</i>\n" if is_super_deal else ""
+
     caption = (
+        f"{super_header}"
         f"🔥 <b>{disc_prefix}{escaped_title}</b>\n"
-        f"🏷️ <i>{escaped_platform}</i>\n\n"
+        f"🏷️ <i>{escaped_platform}</i>\n"
+        f"{urgency_line}\n"
         f"📋 <b>Toque no bloco abaixo para copiar para o WhatsApp:</b>\n\n"
         f"<code>{escaped_wa}</code>"
     )

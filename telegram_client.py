@@ -188,13 +188,13 @@ class TelegramClient:
         tg_caption = format_telegram_caption(deal, wa_text)
         photo_url = deal.get("image", "")
 
-        # Create 1-click WhatsApp share button
+        # Create 1-click WhatsApp share button + direct super deal button
         wa_share_url = f"https://api.whatsapp.com/send?text={urllib.parse.quote(wa_text)}"
-        reply_markup = {
-            "inline_keyboard": [
-                [{"text": "📲 Compartilhar no WhatsApp", "url": wa_share_url}]
-            ]
-        }
+        buttons = []
+        if deal.get("is_super_deal") and deal.get("link"):
+            buttons.append([{"text": "🚨 Garantir Super Desconto", "url": deal.get("link")}])
+        buttons.append([{"text": "📲 Compartilhar no WhatsApp", "url": wa_share_url}])
+        reply_markup = {"inline_keyboard": buttons}
 
         # Telegram photo caption limit is 1024 characters
         if len(tg_caption) <= 1024 and photo_url:
