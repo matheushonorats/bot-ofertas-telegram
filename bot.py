@@ -814,11 +814,11 @@ def handle_telegram_updates(telegram: TelegramClient):
                         panel_text, panel_kb = build_panel_data()
                         telegram.send_message(chat_id, panel_text, reply_markup=panel_kb)
                         # Envia imediatamente as primeiras ofertas para dar a largada oficial
-                        run_deal_scanner(telegram, chat_id=chat_id, max_deals=2)
+                        threading.Thread(target=run_deal_scanner, args=(telegram, chat_id, 2), daemon=True).start()
 
                     elif data == "trigger_deals":
                         telegram.answer_callback_query(cb_id, text="🔎 Buscando ofertas relâmpago agora...")
-                        run_deal_scanner(telegram, chat_id=chat_id)
+                        threading.Thread(target=run_deal_scanner, args=(telegram, chat_id), daemon=True).start()
 
                     continue
 
@@ -839,7 +839,10 @@ def handle_telegram_updates(telegram: TelegramClient):
                 reply_to = message.get("reply_to_message", {})
                 pending_key = f"pending_msg_edit_{chat_id}_{from_user_id}"
 
-                if text.startswith("/"):
+                is_command = text.startswith("/")
+                cmd_raw = text.split()[0].split("@")[0].lower() if is_command else ""
+
+                if is_command:
                     if get_setting(pending_key, ""):
                         set_setting(pending_key, "")
                 else:
@@ -866,7 +869,7 @@ def handle_telegram_updates(telegram: TelegramClient):
                                 telegram.send_message(chat_id, msg_text, reply_markup=msg_kb)
                             continue
 
-                if text.startswith("/start"):
+                if cmd_raw == "/start":
                     welcome = (
                         f"👋 <b>Olá, {username}!</b>\n\n"
                         f"🛍️ Este é o seu <b>Bot de Ofertas Shopee</b>.\n\n"
@@ -876,44 +879,51 @@ def handle_telegram_updates(telegram: TelegramClient):
                         f"2. Escolha o seu grupo no WhatsApp e clique em <b>Enviar</b>!\n\n"
                         f"⚙️ <b>Comandos:</b>\n"
                         f"• /painel - Painel de opções (ligar/desligar frases e filtros)\n"
-                        f"• /ofertas - Buscar ofertas agora mesmo\n"
                         f"• /status - Ver quantas ofertas foram enviadas hoje\n"
+                        f"• /superachados - Buscar Super Achados (≥ 60% OFF) agora\n"
+                        f"• /ofertas - Buscar ofertas normais agora\n"
                         f"• /bianca - Apresentação do bot para a Bianca"
                     )
                     telegram.send_message(chat_id, welcome)
 
-                elif text.startswith("/painel") or text.startswith("/config"):
+                elif cmd_raw in ("/painel", "/config"):
                     panel_text, panel_kb = build_panel_data()
                     telegram.send_message(chat_id, panel_text, reply_markup=panel_kb)
 
-                elif text.startswith("/bianca") or text.startswith("/apresentacao"):
+                elif cmd_raw in ("/bianca", "/apresentacao"):
                     pres_text, pres_kb = get_bianca_presentation()
                     telegram.send_message(chat_id, pres_text, reply_markup=pres_kb)
 
-                elif text.startswith("/superachados") or text.startswith("/super"):
+                elif cmd_raw in ("/superachados", "/super"):
                     super_min = get_setting("super_deal_min_discount", "60")
                     telegram.send_message(chat_id, f"🚨 Buscando Super Achados / Bugs (≥ {super_min}% OFF) agora...")
-                    sent = scan_and_dispatch_super_deals(telegram, chat_id=chat_id)
-                    if sent == 0:
-                        telegram.send_message(chat_id, f"ℹ️ Nenhum Super Achado novo com ≥ {super_min}% OFF encontrado no momento.")
-                    else:
-                        telegram.send_message(chat_id, f"✅ {sent} Super Achados enviados imediatamente ao grupo!")
+                    def _async_super():
+                        sent = scan_and_dispatch_super_deals(telegram, chat_id=chat_id)
+                        if sent == 0:
+                            telegram.send_message(chat_id, f"ℹ️ Nenhum Super Achado novo com ≥ {super_min}% OFF encontrado no momento.")
+                        else:
+                            telegram.send_message(chat_id, f"✅ {sent} Super Achados enviados ao grupo!")
+                    threading.Thread(target=_async_super, daemon=True).start()
 
-                elif text.startswith("/ofertas"):
+                elif cmd_raw == "/ofertas":
                     telegram.send_message(chat_id, "🔎 Buscando as melhores ofertas relâmpago na Shopee e no Mercado Livre agora, aguarde um instante...")
-                    sent = run_deal_scanner(telegram, chat_id=chat_id)
-                    if sent == 0:
-                        telegram.send_message(chat_id, "ℹ️ Nenhuma nova oferta com super desconto encontrada no momento. Buscarei novamente em breve!")
+                    def _async_ofertas():
+                        sent = run_deal_scanner(telegram, chat_id=chat_id)
+                        if sent == 0:
+                            telegram.send_message(chat_id, "ℹ️ Nenhuma nova oferta encontrada no momento. Buscarei novamente em breve!")
+                    threading.Thread(target=_async_ofertas, daemon=True).start()
 
-                elif text.startswith("/refazer"):
-                    telegram.send_message(chat_id, "🧹 Apagando do Telegram as mensagens com link antigo e enviando novas ofertas com os links oficiais das lojas...")
-                    deleted, sent = cleanup_and_repost_dagd_deals(telegram, chat_id=chat_id)
-                    telegram.send_message(
-                        chat_id,
-                        f"✅ Concluído! {deleted} mensagens antigas apagadas e {sent} novas ofertas enviadas com os links oficiais da Shopee e do Mercado Livre."
-                    )
+                elif cmd_raw == "/refazer":
+                    telegram.send_message(chat_id, "🧹 Apagando do Telegram as mensagens com link antigo e enviando novas ofertas...")
+                    def _async_refazer():
+                        deleted, sent = cleanup_and_repost_dagd_deals(telegram, chat_id=chat_id)
+                        telegram.send_message(
+                            chat_id,
+                            f"✅ Concluído! {deleted} mensagens antigas apagadas e {sent} novas ofertas enviadas com links oficiais."
+                        )
+                    threading.Thread(target=_async_refazer, daemon=True).start()
 
-                elif text.startswith("/status"):
+                elif cmd_raw == "/status":
                     stats = get_stats()
                     interval = get_setting("check_interval", str(Config.CHECK_INTERVAL_MINUTES))
                     min_disc = get_setting("min_discount", str(Config.MIN_DISCOUNT_PERCENT))
@@ -951,7 +961,7 @@ def handle_telegram_updates(telegram: TelegramClient):
                     )
                     telegram.send_message(chat_id, status_msg)
 
-                elif text.startswith("/dbcheck"):
+                elif cmd_raw == "/dbcheck":
                     from database import USE_POSTGRES, DATABASE_URL
                     db_type = "✅ PostgreSQL (persistente)" if USE_POSTGRES else "⚠️ SQLite (efêmero - repete após redeploy!)"
                     db_url_hint = DATABASE_URL[:30] + "..." if DATABASE_URL else "❌ Não configurado"
@@ -961,7 +971,7 @@ def handle_telegram_updates(telegram: TelegramClient):
                         f"<b>DATABASE_URL:</b> <code>{db_url_hint}</code>"
                     ))
 
-                elif text.startswith("/ajuda"):
+                elif cmd_raw == "/ajuda":
                     help_msg = (
                         "❓ <b>Como compartilhar as ofertas no WhatsApp:</b>\n\n"
                         "<b>Opção 1 (A mais rápida - 1 Toque):</b>\n"
@@ -975,7 +985,7 @@ def handle_telegram_updates(telegram: TelegramClient):
                     )
                     telegram.send_message(chat_id, help_msg)
 
-                elif text.split(None, 1)[0].split("@")[0].lower() in ("/topo", "/cta", "/rodape", "/cupomshopee", "/cupomml"):
+                elif cmd_raw in ("/topo", "/cta", "/rodape", "/cupomshopee", "/cupomml"):
                     parts = text.split(None, 1)
                     cmd_name = parts[0].split("@")[0].lower()
                     cmd_arg = parts[1].strip() if len(parts) > 1 else ""
@@ -1007,6 +1017,7 @@ def handle_telegram_updates(telegram: TelegramClient):
 
 def scheduled_worker(telegram: TelegramClient):
     """Background worker that periodically runs deal scans and cleans expired deals."""
+    time.sleep(5)  # Pequeno atraso para deixar o bot inicializar e responder comandos primeiro
     while True:
         try:
             # Respect dynamic interval from settings
@@ -1031,6 +1042,7 @@ def super_deals_worker(telegram: TelegramClient):
     Dispatches immediately when found without waiting for the normal interval.
     """
     print("🚀 [Super Achados] Monitor imediato em segundo plano ativo (checagem a cada 2 minutos)...")
+    time.sleep(10)  # Aguarda 10s para não competir com a inicialização
     while True:
         try:
             scan_and_dispatch_super_deals(telegram)
@@ -1066,12 +1078,6 @@ def main():
 
     # Inicia o servidor web interno para o Render / cloud
     start_health_server()
-
-    # Limpa automaticamente mensagens antigas com link da.gd e envia novas ofertas com links oficiais
-    try:
-        cleanup_and_repost_dagd_deals(telegram)
-    except Exception as e:
-        print(f"[Cleanup Inicial] Erro na limpeza: {e}")
 
     if args.scan:
         run_deal_scanner(telegram)
